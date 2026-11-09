@@ -1,0 +1,26 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+.env
+data/input/
+data/*.sqlite
+data/*.sqlite-journal
+*.csv
+.pytest_cache/
+.DS_Store
+
+# Per-case files that hold data-subject personal data: never commit.
+# Templates (config.example.yaml, claude_strict.example.md) are committed instead.
+config.yaml
+config_*.yaml
+claude.md
+CLAUDE.md
+claude_strict.md
+.claude/
+data/
+*.sqlite
+*.xlsx
+*.sha256
+*.log

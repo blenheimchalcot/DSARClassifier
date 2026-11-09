@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dsar-classifier"
+version = "0.1.0"
+description = "DSAR (GDPR) classification pipeline over Purview eDiscovery exports."
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27.0",
+    "libratom>=0.4.0",
+    "python-docx>=1.1.0",
+    "openpyxl>=3.1.2",
+    "pypdf>=4.0.0",
+    "python-pptx>=0.6.23",
+    "xlrd>=2.0.1",
+    "pyxlsb>=1.0.10",
+    "extract-msg>=0.50.0",
+    "beautifulsoup4>=4.12.0",
+    "striprtf>=0.0.22",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+    "click>=8.1.7",
+    "tqdm>=4.66.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+dsar = "dsar.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+markers = [
+    "live: tests that call the live Claude API (opt-in, cost money)",
+]

@@ -1,0 +1,53 @@
+# TEMPLATE. Copy to config.yaml (gitignored) and fill in the data subject for the case.
+# Data subject profile for the current DSAR.
+# Editing this file is the supported way to run the pipeline for a different subject.
+
+subject:
+  name: "<SUBJECT FULL NAME>"
+  # Aliases are matched case-insensitively with word boundaries.
+  # Mirror the KQL query used in the Purview eDiscovery export.
+  aliases:
+    - "<SUBJECT FULL NAME>"
+    - "<FIRST LAST>"
+    - "<LAST, FIRST>"
+    - "<INITIALS>"
+    - "<USERNAME>"
+  emails:
+    - "<work.email@example.com>"
+    - "<personal.email@example.com>"
+
+# Classifier settings.
+# default: any model tag served by the local Ollama daemon (`ollama list`).
+# concurrency: kept low because Apple Silicon Metal serialises GPU work; extra
+# parallelism just queues at the daemon and risks RAM pressure on 16 GB.
+model:
+  default: "gemma4:e4b"
+  max_tokens: 300
+  temperature: 0.0
+  concurrency: 2
+
+# Provenance labels (per case). Descriptive only — nothing is excluded.
+# `match` is a glob relative to $DSAR_DATA_DIR/input; first match wins.
+# Unmatched files are labelled "Primary source (Purview export)".
+provenance:
+  # Example rules (first match wins). Label other DSARs' work product or export
+  # metadata found inside an export so the response can attribute it.
+  - match: "Files/SharePoint/Documents/DSAR/<PRIOR-CASE>/*"
+    label: "Prior DSAR case file (<PRIOR-CASE>)"
+  - match: "metadata/*"
+    label: "Purview export metadata (not controller-held source data)"
+  - match: "*<EXPORT_NAME>*.zip"
+    label: "Original Purview export package (extracted and hashed; not ingested directly)"
+
+# Which alias-matched chunks `dsar classify` sends to the model. Out-of-scope
+# chunks stay in the DB (and in the provenance catalogue) but are not scored.
+classify_scope:
+  include_labels:
+    - "Primary source (Purview export)"
+  include_paths: []
+  exclude_paths: []
+
+# Chunking settings
+chunking:
+  max_chars: 8000
+  overlap_chars: 200
