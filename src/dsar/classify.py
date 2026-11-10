@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from dsar import db
+from dsar import db, evidence
 
 
 log = logging.getLogger(__name__)
@@ -31,6 +31,12 @@ def _sqlite_safe_int(v) -> int | None:
 
 
 _SPECIAL_RETURNS = {"[not able to classify]", "[Email empty]", "[File empty]"}
+
+RETRY_PROMPT = (
+    "Your evidence is not in the text you were given. Classify the same text again. "
+    "Evidence must be copied exactly from that text, never from the examples in your "
+    "instructions. If nothing in the text supports a score of 7 or more, score it lower."
+)
 
 
 @dataclass
@@ -158,6 +164,34 @@ async def classify_all(
                     # field block the actual classification.
                     input_tokens = _sqlite_safe_int(body.get("prompt_eval_count")) or 0
                     output_tokens = _sqlite_safe_int(body.get("eval_count")) or 0
+                    # Evidence the model quotes must be in the chunk. If not, ask once
+                    # more with the failure stated; keep whichever answer verifies,
+                    # else the first. `dsar report` shows the check for every row.
+                    if evidence.verify(parsed.score, parsed.evidence, row["content"], row["subject"]) in (evidence.NO, evidence.MISSING):
+                        retry = await client.post("/api/chat", json={
+                            "model": model,
+                            "messages": [
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_prompt},
+                                {"role": "assistant", "content": text},
+                                {"role": "user", "content": RETRY_PROMPT},
+                            ],
+                            "stream": False,
+                            "think": False,
+                            "options": {"temperature": temperature, "num_predict": max_tokens},
+                        })
+                        retry.raise_for_status()
+                        rbody = retry.json()
+                        rparsed = parse_response(rbody["message"]["content"])
+                        input_tokens += _sqlite_safe_int(rbody.get("prompt_eval_count")) or 0
+                        output_tokens += _sqlite_safe_int(rbody.get("eval_count")) or 0
+                        rcheck = evidence.verify(rparsed.score, rparsed.evidence, row["content"], row["subject"])
+                        log.warning("chunk %s: evidence not found in source; retry check=%r", chunk_id, rcheck or "n/a (score < 7)")
+                        if rcheck not in (evidence.NO, evidence.MISSING):
+                            parsed = rparsed
+                        # Keep both answers in raw_response so the retry is on the record.
+                        parsed.raw = (f"{text.strip()}\n--- evidence not in source; retried ---\n"
+                                      f"{rparsed.raw.strip()}\n--- kept: {'retry' if parsed is rparsed else 'first'} ---")
                     db.insert_classification(
                         conn,
                         chunk_id=chunk_id,

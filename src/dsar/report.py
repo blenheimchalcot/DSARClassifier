@@ -3,6 +3,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+from dsar import evidence
+
 
 # Pull the per-chunk row + its thread's chunk count via a window-style join.
 # Sorted score DESC, then by thread + sent date so chunks in the same thread
@@ -105,7 +107,7 @@ def export_csv(conn: sqlite3.Connection, out_path: str | Path) -> int:
     rows = conn.execute(REPORT_SQL).fetchall()
 
     fieldnames = [
-        "score", "description", "evidence",
+        "score", "description", "evidence", "evidence_in_source",
         "source_type",
         "sent_at", "from", "to", "cc",
         "subject",
@@ -131,6 +133,7 @@ def export_csv(conn: sqlite3.Connection, out_path: str | Path) -> int:
                 "score": score,
                 "description": r["description"] or "",
                 "evidence": r["evidence"] or "",
+                "evidence_in_source": evidence.verify(r["score"], r["evidence"], r["content"], r["subject"]),
                 "source_type": source_type,
                 "sent_at": _sent_field(meta, source_type),
                 "from": _from_field(meta, source_type),

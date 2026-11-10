@@ -25,8 +25,9 @@ dsar attachments            # 2. extract + catalogue every PST attachment (appen
 dsar ingest                 # 3. chunk everything into dsar.sqlite
 dsar provenance             # 4. verify against the manifest, link to Purview custodian/location
 dsar classify --plan        # 5. check scope
-dsar classify               # 6. score with the local model
-dsar report                 # 7. output/results.csv
+dsar classify               # 6. score with the local model (score 7+ evidence is checked; one retry if not in source)
+dsar verify-evidence        # 7. re-check every score 7+ quote; --supersede withdraws failures for re-scoring
+dsar report                 # 8. output/results.csv (column evidence_in_source: yes / partial / no / missing)
 ```
 
 Use `--config <path>` to run a case with its own config file.
@@ -41,6 +42,8 @@ caffeinate -d -i -s &       # stop macOS sleeping during long runs
 ```
 
 ## Known limitations
+
+- The model can quote evidence that is not in the source (seen: the prompt's own score-10 example; an email address it made up). Never rely on a score 7+ row unless `evidence_in_source` is `yes`; check `partial`, `no` and `missing` by hand. The check catches invented quotes, not wrong judgement: a real quote can still carry too high a score.
 
 - Embedded emails inside PST attachments (attach method 5, `IPM.Note`): pypff exposes headers and subject, not the body. These are flagged in `pst_attachments_catalogue.csv` for manual review.
 - Attachments inside `.eml` files are listed by name, not extracted.

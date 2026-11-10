@@ -58,6 +58,24 @@ CREATE TABLE IF NOT EXISTS classifications (
 
 CREATE INDEX IF NOT EXISTS idx_classifications_score ON classifications(score);
 
+-- Classifications withdrawn so the chunk can be re-scored (e.g. evidence not in the
+-- source). Rows are moved here, never deleted, so the original answer stays on record.
+CREATE TABLE IF NOT EXISTS superseded_classifications (
+    chunk_id           TEXT NOT NULL,
+    score              INTEGER,
+    description        TEXT,
+    evidence           TEXT,
+    special_return     TEXT,
+    raw_response       TEXT NOT NULL,
+    model              TEXT NOT NULL,
+    input_tokens       INTEGER,
+    output_tokens      INTEGER,
+    cache_read_tokens  INTEGER,
+    classified_at      TEXT NOT NULL,
+    superseded_at      TEXT NOT NULL,
+    reason             TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS skipped (
     source_path  TEXT NOT NULL,
     reason       TEXT NOT NULL,

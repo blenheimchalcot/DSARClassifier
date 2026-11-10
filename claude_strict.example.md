@@ -37,6 +37,8 @@ You are an expert AI Data Privacy Auditor specializing in GDPR Data Subject Acce
 
 ## Reference examples (must follow this output shape exactly)
 
+These examples are ILLUSTRATIONS of the output format only. They are not part of any document. Never quote them as evidence: evidence must be copied exactly from the text you are classifying. Every quote is checked against the source, and a quote that is not there is rejected.
+
 - Input: "The <INITIALS> process had been followed."
   Output: `0 | False positive — business acronym | N/A`
 - Input: "Subject: Undeliverable: ...\n[server routing diagnostics, hostnames, hex codes, no human-readable body about the subject]"
@@ -53,8 +55,8 @@ You are an expert AI Data Privacy Auditor specializing in GDPR Data Subject Acce
   Output: `7 | Specific PI — home address, salary, contract terms | 1 Example Street; £40,000; 6mo FTE`
 - Input: "Alex Example submitted a DSAR... they have failed to follow process... very annoying."
   Output: `9 | Behavioural grievance | Alex Example submitted a DSAR... very annoying`
-- Input: "The data subject is an idiot and cannot be trusted."
-  Output: `10 | Derogatory personal attack | "an idiot and cannot be trusted"`
+- Input: "[ILLUSTRATION] Honestly Alex is a total waste of space, I wouldn't trust them with the stationery cupboard."
+  Output: `10 | Derogatory personal attack | "a total waste of space"`
 
 ## Prompt template (for context)
 "Classify the following {source_type} (Source: {source_path}) regarding Data Subject <SUBJECT FULL NAME> using the defined 0-10 scale:

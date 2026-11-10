@@ -507,6 +507,46 @@ def provenance_cmd(db_path: str | None, config_path: str, manifest_path: str | N
         raise click.ClickException(f"{counters['manifest_mismatch']} file(s) do not match the manifest")
 
 
+@main.command(name="verify-evidence")
+@click.option("--db-path", default=None, help="SQLite path. Defaults to $DSAR_DATA_DIR/dsar.sqlite.")
+@click.option("--supersede", is_flag=True,
+              help="Move classifications whose evidence is not in the source to superseded_classifications, "
+                   "so the next `dsar classify` re-scores them.")
+def verify_evidence_cmd(db_path: str | None, supersede: bool) -> None:
+    """Check every score 7+ evidence quote against its chunk's text."""
+    from collections import Counter
+    from dsar import evidence
+
+    if db_path is None:
+        db_path = str(_data_dir() / "dsar.sqlite")
+    with db.connect(db_path) as conn:
+        db.init_schema(conn)
+        rows = conn.execute(
+            "SELECT cl.chunk_id, cl.score, cl.evidence, c.content, c.subject FROM classifications cl "
+            "JOIN chunks c ON c.chunk_id = cl.chunk_id WHERE cl.score >= ?", (evidence.EVIDENCE_REQUIRED_FROM,)
+        ).fetchall()
+        counts: Counter = Counter()
+        failed = []
+        for r in rows:
+            v = evidence.verify(r["score"], r["evidence"], r["content"], r["subject"])
+            counts[v] += 1
+            if v in (evidence.NO, evidence.MISSING):
+                failed.append((r["chunk_id"], r["score"], v))
+        click.echo(f"Score {evidence.EVIDENCE_REQUIRED_FROM}+ classifications: {len(rows)} -> {dict(counts)}")
+        for cid, score, v in failed:
+            click.echo(f"  {v:8} score {score:>2}  {cid}")
+        if supersede and failed:
+            now = db._now()
+            for cid, _, v in failed:
+                conn.execute(
+                    "INSERT INTO superseded_classifications SELECT *, ?, ? FROM classifications WHERE chunk_id = ?",
+                    (now, f"evidence {v} in source", cid),
+                )
+                conn.execute("DELETE FROM classifications WHERE chunk_id = ?", (cid,))
+            conn.commit()
+            click.echo(f"Superseded {len(failed)}; run `dsar classify` to re-score them.")
+
+
 @main.command(name="report")
 @click.option("--db-path", default=None, help="SQLite path. Defaults to $DSAR_DATA_DIR/dsar.sqlite.")
 @click.option("--out", "out_path", default=None, help="CSV output path. Defaults to $DSAR_DATA_DIR/output/results.csv.")
