@@ -9,7 +9,7 @@ from pathlib import Path
 import click
 from dotenv import load_dotenv
 
-from dsar import audit, db, provenance, pst_attachments, report
+from dsar import audit, db, provenance, pst_attachments, qa, report
 from dsar.chunking import (
     csv_table,
     documents,
@@ -438,12 +438,13 @@ def classify(db_path: str | None, config_path: str, system_prompt: str, model: s
                                 for label, (i, o, d) in tally.items()}
             return
         pending = len(db.unclassified_chunk_ids(conn, limit=limit, in_scope=in_scope))
+        qa_fp = qa.db_fingerprint(conn)
     scope_desc = "all alias-matched chunks" if cfg.classify_scope.is_unrestricted else str(cfg.classify_scope)
     click.echo(f"Scope: {scope_desc}")
     run.data.update(scope=scope_desc, pending_at_start=pending, ollama=ollama_info(chosen_model),
                     settings={"max_tokens": cfg.model.max_tokens, "temperature": cfg.model.temperature,
                               "concurrency": cfg.model.concurrency})
-    _require_checks(run, data_dir, cfg, sys_prompt, chosen_model, skip_checks)
+    _require_checks(run, data_dir, cfg, sys_prompt, chosen_model, qa_fp, skip_checks)
     progress =audit.Progress(data_dir / "output", "classify", pending)
 
     def _progress(chunk_id: str, parsed, totals) -> None:
@@ -485,26 +486,37 @@ def classify(db_path: str | None, config_path: str, system_prompt: str, model: s
 
 
 def _require_checks(run: audit.Run, data_dir: Path, cfg, sys_prompt: str, chosen_model: str,
-                    skip_checks: str | None) -> None:
-    """Refuse to classify without a passing model check for this exact model build, prompt and settings."""
+                    qa_fp: dict, skip_checks: str | None) -> None:
+    """Refuse to classify without a passing ingest QA for this database and a passing
+    model check for this exact model build, prompt and settings."""
     from dsar import model_check
 
     if chosen_model != cfg.model.default:
         cfg = _with_model(cfg, chosen_model)
-    fp = model_check.fingerprint(cfg, sys_prompt, run.data["ollama"].get("digest"))
-    passing = model_check.latest_pass(data_dir / "output", fp)
-    if passing is not None:
-        run.data["model_check"] = passing.name
-        click.echo(f"Model check: {passing.name}")
+    output_dir = data_dir / "output"
+    missing = []
+    ingest_pass = qa.latest_ingest_pass(output_dir, qa_fp)
+    if ingest_pass is not None:
+        run.data["ingest_qa"] = ingest_pass.name
+        click.echo(f"Ingest QA: {ingest_pass.name}")
+    else:
+        missing.append("`dsar qa ingest` for the current database")
+    model_pass = model_check.latest_pass(output_dir, model_check.fingerprint(cfg, sys_prompt, run.data["ollama"].get("digest")))
+    if model_pass is not None:
+        run.data["model_check"] = model_pass.name
+        click.echo(f"Model check: {model_pass.name}")
+    else:
+        missing.append("`dsar model-check` for this model build, system prompt and settings")
+    if not missing:
         return
     if skip_checks:
         run.data["checks_skipped"] = skip_checks
-        run.warn(f"model check skipped: {skip_checks}")
-        click.echo(f"Model check SKIPPED: {skip_checks}", err=True)
+        run.data["checks_missing"] = missing
+        run.warn(f"checks skipped ({'; '.join(missing)}): {skip_checks}")
+        click.echo(f"Checks SKIPPED ({'; '.join(missing)}): {skip_checks}", err=True)
         return
     raise click.ClickException(
-        "no passing `dsar model-check` for this model build, system prompt and settings. "
-        "Run `dsar model-check` first, or pass --skip-checks \"<reason>\" (audit-logged).")
+        "no passing " + " or ".join(missing) + ". Run it first, or pass --skip-checks \"<reason>\" (audit-logged).")
 
 
 def _with_model(cfg, model: str):
@@ -577,6 +589,51 @@ def model_check_cmd(db_path: str | None, config_path: str, system_prompt: str, r
     run.hash_file(path.name, path)
     if not result["passed"]:
         raise click.ClickException("model check failed; `dsar classify` will not run until it passes")
+
+
+@main.group(name="qa")
+def qa_group() -> None:
+    """Quality assurance between stages; results are audit-logged and gate `dsar classify`."""
+
+
+@qa_group.command(name="ingest")
+@click.option("--db-path", default=None, help="SQLite path. Defaults to $DSAR_DATA_DIR/dsar.sqlite.")
+@click.option("--config", "config_path", default=DEFAULT_CONFIG, show_default=True)
+@_audited("qa ingest")
+def qa_ingest_cmd(db_path: str | None, config_path: str, run: audit.Run) -> None:
+    """Check every exported item was read: file states, Purview reconciliation, low text yield, oversize chunks.
+
+    Run after `dsar ingest` and `dsar provenance`, before `dsar classify`.
+    """
+    data_dir = _data_dir()
+    if db_path is None:
+        db_path = str(data_dir / "dsar.sqlite")
+    if not Path(db_path).exists():
+        raise click.ClickException(f"{db_path} not found: run `dsar ingest` first")
+    cfg = load_config(config_path)
+    with db.connect(db_path) as conn:
+        db.init_schema(conn)
+        try:
+            in_scope = provenance.scope_filter(conn, data_dir / "input", cfg.classify_scope)
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
+        result = qa.ingest_qa(conn, data_dir / "input", cfg.chunking.max_chars, in_scope)
+    json_path, csv_path = qa.write_ingest_qa(result, data_dir / "output")
+
+    s = result["summary"]
+    click.echo(f"Files under input/: {s['files']}  {s['file_states']}")
+    p = s["purview"]
+    click.echo(f"Purview items: {p['items']}  missing files: {p['missing_files']}  export failures: "
+               f"{p['export_failures']}  PST emails not ingested: {p['pst_emails_not_ingested']}/{p['pst_emails']}")
+    for name, n in s["findings"].items():
+        click.echo(f"  {n:>6}  {name}")
+    click.echo(f"{s['fail']} fail, {s['warn']} warn -> {csv_path}")
+    run.data.update(passed=s["passed"], files=s["files"], file_states=s["file_states"], purview=p,
+                    findings=s["findings"], result=json_path.name)
+    run.hash_file(json_path.name, json_path)
+    run.hash_file(csv_path.name, csv_path)
+    if not s["passed"]:
+        raise click.ClickException(f"ingest QA failed ({s['fail']} FAIL finding(s)); see {csv_path.name}")
 
 
 @main.command(name="attachments")
