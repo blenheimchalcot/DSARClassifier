@@ -36,6 +36,8 @@ dsar qa classify     --config <case config>   # 7a. validate classifications; se
 dsar qa import-sample <case>/output/qa_sample_<time>.xlsx   # 7b. when the reviewer returns it
 dsar report --out <case>/output/results.csv   # 8. full report
 #    then derive results_scored.csv = rows with a raw_response (reviewers use this)
+dsar review export                            # 8a. HR/privacy reviewer workbook for scores 7-10 (docs/REVIEWER_GUIDE.md)
+dsar review import <returned workbook>        # 8b. decisions into review_decisions; repeat until `dsar review status` is complete
 dsar audit verify                             # 9. chain intact; note the head hash in the case file
 ```
 

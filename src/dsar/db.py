@@ -145,6 +145,26 @@ CREATE TABLE IF NOT EXISTS pst_attachments (
 
 CREATE INDEX IF NOT EXISTS idx_pst_attachments_stored ON pst_attachments(stored_rel_path);
 CREATE INDEX IF NOT EXISTS idx_pst_attachments_text ON pst_attachments(recovered_text_rel_path);
+
+-- Human review decisions on high-scoring items (`dsar review import`). Append-only:
+-- each import adds rows, and the newest row per chunk is the current decision.
+-- Kept apart from classifications so the model's score is never overwritten.
+CREATE TABLE IF NOT EXISTS review_decisions (
+    chunk_id          TEXT NOT NULL,
+    model_score       INTEGER,
+    assessment        TEXT,
+    adjusted_score    INTEGER,
+    decision          TEXT,
+    reason            TEXT,
+    notes             TEXT,
+    reviewer          TEXT,
+    review_date       TEXT,
+    workbook          TEXT NOT NULL,
+    workbook_sha256   TEXT NOT NULL,
+    imported_at       TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_decisions_chunk ON review_decisions(chunk_id);
 """
 
 

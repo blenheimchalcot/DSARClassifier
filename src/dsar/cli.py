@@ -726,6 +726,84 @@ def qa_import_sample_cmd(workbook: Path, run: audit.Run) -> None:
         run.warn(f"{result['outstanding']} sample row(s) not yet reviewed")
 
 
+@main.group(name="review")
+def review_group() -> None:
+    """Workbook for HR / privacy reviewers to decide on items scored 7-10 (see docs/REVIEWER_GUIDE.md)."""
+
+
+@review_group.command(name="export")
+@click.option("--db-path", default=None, help="SQLite path. Defaults to $DSAR_DATA_DIR/dsar.sqlite.")
+@click.option("--min-score", type=click.IntRange(0, 10), default=7, show_default=True)
+@click.option("--out", "out_path", default=None, help="Defaults to $DSAR_DATA_DIR/output/review_<date>.xlsx.")
+@_audited("review export")
+def review_export_cmd(db_path: str | None, min_score: int, out_path: str | None, run: audit.Run) -> None:
+    """Write the reviewer workbook: one row per item scored MIN_SCORE+, evidence highlighted in context."""
+    from dsar import review
+
+    data_dir = _data_dir()
+    if db_path is None:
+        db_path = str(data_dir / "dsar.sqlite")
+    if out_path is None:
+        out_path = str(data_dir / "output" / f"review_{date.today().isoformat()}.xlsx")
+    if Path(out_path).exists():
+        raise click.ClickException(f"{out_path} exists; never overwritten (use --out)")
+    with db.connect(db_path) as conn:
+        db.init_schema(conn)
+        stats = review.export(conn, Path(out_path), min_score)
+    click.echo(f"Wrote {stats['rows']} items {stats['by_score']} to {out_path}")
+    if stats["prefilled"]:
+        click.echo(f"  {stats['prefilled']} already decided (pre-filled from earlier imports)")
+    if stats["evidence_not_found"]:
+        click.echo(f"  {stats['evidence_not_found']} with evidence not (fully) found in the source: flagged in the workbook")
+    run.data.update(min_score=min_score, out=out_path, **stats)
+    run.hash_file(Path(out_path).name, out_path)
+
+
+@review_group.command(name="import")
+@click.argument("workbook", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--db-path", default=None, help="SQLite path. Defaults to $DSAR_DATA_DIR/dsar.sqlite.")
+@_audited("review import")
+def review_import_cmd(workbook: Path, db_path: str | None, run: audit.Run) -> None:
+    """Load reviewer decisions from a returned workbook (append-only; model scores untouched)."""
+    from dsar import review
+
+    if db_path is None:
+        db_path = str(_data_dir() / "dsar.sqlite")
+    with db.connect(db_path) as conn:
+        db.init_schema(conn)
+        try:
+            result = review.import_workbook(conn, workbook)
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
+        st = review.status(conn)
+    click.echo(f"Imported {result['imported']} decision(s) {result['decisions']}; "
+               f"{result['outstanding']} row(s) without a decision; {result['invalid']} invalid")
+    for p in result["problems"]:
+        click.echo(f"  ! row {p['row']} ({p['review_id']}): {'; '.join(p['errors'])}", err=True)
+    click.echo(f"Case: {st['decided']}/{st['items']} items decided")
+    run.data.update({k: v for k, v in result.items() if k != "problems"}, case_status=st)
+    if result["problems"]:
+        run.data["problems"] = result["problems"][:AUDIT_ERROR_LIMIT]
+        run.warn(f"{result['invalid']} row(s) not imported: fix and re-import")
+    run.hash_file("dsar.sqlite", db_path)
+
+
+@review_group.command(name="status")
+@click.option("--db-path", default=None, help="SQLite path. Defaults to $DSAR_DATA_DIR/dsar.sqlite.")
+def review_status_cmd(db_path: str | None) -> None:
+    """Items decided vs outstanding, per model score."""
+    from dsar import review
+
+    if db_path is None:
+        db_path = str(_data_dir() / "dsar.sqlite")
+    with db.connect(db_path) as conn:
+        db.init_schema(conn)
+        st = review.status(conn)
+    click.echo(f"{st['decided']}/{st['items']} items decided  {st['decisions']}")
+    for score, s in st["per_score"].items():
+        click.echo(f"  score {score:>2}: {s['decided']}/{s['items']}")
+
+
 @main.command(name="attachments")
 @click.option("--manifest", "manifest_path", default=None,
               help="SHA-256 manifest to append stage-4 hashes to. Defaults to the newest output/pst_manifest_*.sha256.")
