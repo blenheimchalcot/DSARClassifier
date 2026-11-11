@@ -167,7 +167,18 @@ def _newest_manifest(data_dir: Path) -> str | None:
     return str(manifests[-1]) if manifests else None
 
 
+def _print_version(ctx: click.Context, _param, value: bool) -> None:
+    if not value or ctx.resilient_parsing:
+        return
+    code = audit.code_version()
+    commit = f" ({code['commit'][:12]}{', modified' if code['dirty'] else ''})" if code["commit"] else ""
+    click.echo(f"dsar {code['version']}{commit}")
+    ctx.exit()
+
+
 @click.group()
+@click.option("--version", is_flag=True, expose_value=False, is_eager=True, callback=_print_version,
+              help="Show the version and git commit, then exit.")
 def main() -> None:
     """DSAR classification pipeline."""
     load_dotenv()
@@ -1063,6 +1074,71 @@ def manifest_cmd(stage: str | None, force_new: bool, run: audit.Run) -> None:
         run.data["changed_files"] = changed[:AUDIT_ERROR_LIMIT]
         raise click.ClickException(f"{len(changed)} listed file(s) no longer match their manifest hash: "
                                    + ", ".join(changed[:5]))
+
+
+@main.command(name="init-case")
+@click.argument("case_ref")
+@click.option("--root", required=True, type=click.Path(file_okay=False, path_type=Path),
+              help="Folder holding all cases on this machine (local disk, not cloud-synced).")
+@click.option("--controller", default="", help="Legal entity responding to the request, for the audit log header.")
+@click.option("--env-file", default=".env", show_default=True, type=click.Path(dir_okay=False, path_type=Path),
+              help="Written with DSAR_DATA_DIR for this case if it doesn't exist yet.")
+def init_case_cmd(case_ref: str, root: Path, controller: str, env_file: Path) -> None:
+    """Create a case folder: <ROOT>/<CASE_REF>/data/{input,output}, private, with config and prompt templates.
+
+    Starts the case audit log. Refuses to run inside a cloud-synced folder or over an existing case.
+    """
+    import re
+    import shutil
+    import socket
+    from dsar import doctor
+
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", case_ref):
+        raise click.ClickException("CASE_REF may contain letters, digits, '.', '_' and '-' only")
+    root = root.expanduser().resolve()
+    if doctor.is_synced_path(root):
+        raise click.ClickException(f"{root} is inside a cloud-synced folder: case data must stay on the local disk")
+    case_dir = root / case_ref
+    if case_dir.exists():
+        raise click.ClickException(f"{case_dir} already exists; never overwritten")
+    data_dir = case_dir / "data"
+    (data_dir / "input").mkdir(parents=True)
+    (data_dir / "output").mkdir()
+    for p in (case_dir, data_dir, data_dir / "input", data_dir / "output"):
+        p.chmod(0o700)
+
+    repo = Path(__file__).resolve().parents[2]
+    copied = []
+    for template, target in (("config.example.yaml", "config.yaml"), ("claude_strict.example.md", "claude_strict.md")):
+        src = repo / template
+        if src.exists():
+            shutil.copyfile(src, data_dir / target)
+            (data_dir / target).chmod(0o600)
+            copied.append(target)
+
+    env_line = f"DSAR_DATA_DIR={data_dir}"
+    if env_file.exists():
+        env_note = f"{env_file} exists, not changed: set {env_line}"
+    else:
+        env_file.write_text(f"{env_line}\n", encoding="utf-8")
+        env_note = f"wrote {env_file}"
+
+    audit.AuditLog(data_dir / "output").append("note", "init-case", {
+        "text": f"Case {case_ref} opened",
+        "case_ref": case_ref,
+        "controller": controller or "(not given)",
+        "operator": audit.actor(),
+        "machine": socket.gethostname(),
+        "data_dir": str(data_dir),
+        "code": audit.code_version(),
+        "templates": copied,
+    })
+    click.echo(f"Case folder: {case_dir} (chmod 700)")
+    for name in copied:
+        click.echo(f"  {data_dir / name}  <- fill in the subject, then pass with --config / --system-prompt")
+    click.echo(f"  {env_note}")
+    click.echo("Next: fill in both files, run `dsar doctor --config ... --system-prompt ...`, "
+               "then put the Purview ZIPs in input/ and run `dsar manifest`.")
 
 
 @main.command(name="doctor")

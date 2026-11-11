@@ -1,5 +1,7 @@
 # Moving to another laptop
 
+> **Operator-internal.** This describes our own operator's setup (OneDrive working copy, git kept outside it). It is not part of the handover pack for other organisations: they install from a release (see [HANDOVER.md](HANDOVER.md)).
+
 What moves by itself, what doesn't, and how to bring each part across.
 
 The platform's source of truth is GitHub; the OneDrive folder is only the operator's synced working copy of it. On any new machine you can equally `git clone` from GitHub. Case data always stays on a local disk.

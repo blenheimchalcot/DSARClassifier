@@ -58,11 +58,10 @@ If the server has no internet access, copy `~/.ollama/models/` from a machine th
 ## 4. Set up a case
 
 ```sh
-mkdir -p /srv/dsar/<CASE-REF>/data/{input,output} && chmod -R 700 /srv/dsar/<CASE-REF>
-cp .env.example .env                                   # DSAR_DATA_DIR=/srv/dsar/<CASE-REF>/data
-cp config.example.yaml /srv/dsar/<CASE-REF>/data/config.yaml        # subject, aliases, emails
-cp claude_strict.example.md /srv/dsar/<CASE-REF>/data/claude_strict.md  # subject in the prompt
+dsar init-case <CASE-REF> --root /srv/dsar --controller "<controller legal entity>"
 ```
+
+This creates `/srv/dsar/<CASE-REF>/data/{input,output}` (chmod 700), copies `config.yaml` and `claude_strict.md` templates into the case `data/` folder, writes `.env` with `DSAR_DATA_DIR` if there isn't one, and opens the case audit log. It refuses a cloud-synced root or an existing case.
 
 Keep the case's config and prompt **inside the case directory** and pass them explicitly, so two cases can never share a subject by accident:
 
