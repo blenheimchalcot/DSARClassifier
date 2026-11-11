@@ -8,9 +8,9 @@ These rules come from running real cases. Each one exists because something went
 |---|---|
 | **One directory and one `dsar.sqlite` per case**, outside any cloud-synced folder. Check `DSAR_DATA_DIR` and the subject in `config.yaml` before every command. | One DSAR must never be contaminated by another. |
 | **No subject data in the code folder or in git.** `config.yaml`, `claude_strict.md`, `CLAUDE.md`, `.env`, `.claude/` and all case data are gitignored. Run the PD scan (section 6) before every commit. | The code folder is synced and the repo is shared. |
-| **Hash before you touch.** SHA-256 manifest of the Purview ZIPs and every extracted file before ingest (`output/pst_manifest_<date>.sha256`). | Proves the bytes classified are the bytes Purview exported. |
+| **Hash before you touch.** SHA-256 manifest of the Purview ZIPs and every extracted file before ingest (`dsar manifest` → `output/pst_manifest_<date>.sha256`). | Proves the bytes classified are the bytes Purview exported. |
 | **Never delete.** Superseded DBs and outputs are moved (`mv`) to `output/archive_pre-reingest_<date>/runN_<reason>/` and re-hashed after the move. Processed PSTs go to `output/processed_pst_<date>_DELETABLE/`; only the operator deletes. | Chain of custody. |
-| **Append-only `output/AUDIT_LOG.md`** from case open: UTC time, actor, action, evidence (hashes, counts, log paths). Log failures and retries too. Correct by a new entry, never by editing an old one. | The case must be demonstrable. |
+| **Append-only audit log** from case open. Every `dsar` command writes start/end entries itself (UTC time, actor, code commit, config/prompt hashes, counts, output hashes, warnings, errors, retries) to `output/AUDIT_LOG.md` and the hash-chained `output/AUDIT_LOG.jsonl`. Record decisions and manual steps with `dsar audit note`. Set `DSAR_OPERATOR` in `.env`. Correct by a new entry, never by editing an old one; `dsar audit verify` detects edits. | The case must be demonstrable. |
 | **Never silently drop content.** Persist email bodies verbatim (no signature or quoted-history stripping). After ingest, spot-check large files that produced few chunks. | A missing paragraph can be the only copy of something the subject is entitled to. |
 | **Never trust model output.** Every score 7+ quote must be found in the source (`evidence_in_source`). The check catches invented quotes, not bad judgement, so sanity-check high scores too. | The model has quoted its own prompt example, and invented an email address. |
 | **Exclude, don't delete.** Other DSARs' work product found in an export (results files, reports, prompts naming the subject) is labelled with `provenance:` rules and kept out of scope with `classify_scope`, with the decision logged. Ask the operator; don't assume. | Prior case output can be most of the hits. |
@@ -18,8 +18,11 @@ These rules come from running real cases. Each one exists because something went
 ## 2. Case run order
 
 ```sh
-# 0. Case dir: <root>/<CASE-REF>/data/{input,output}; AUDIT_LOG.md started; .env points at it
+# 0. Case dir: <root>/<CASE-REF>/data/{input,output}; .env points at it
+dsar audit note "Case <CASE-REF> opened: controller, operator, machine"
 # 1. Hash the Purview ZIPs, extract to input/PSTs, input/Files, input/metadata, hash every file
+dsar manifest --stage "Purview ZIPs before extraction"
+dsar manifest --stage "Extracted export"
 dsar attachments --config <case config>   # 2. PST attachments out + catalogued (stage-4 hashes)
 dsar ingest      --config <case config>   # 3. chunk into dsar.sqlite
 dsar provenance  --config <case config>   # 4. verify against manifest; custodian/location per file
@@ -29,11 +32,14 @@ dsar classify        --config <case config>   # 6. score (evidence checked, one 
 dsar verify-evidence                          # 7. re-check every score 7+ quote
 dsar report --out <case>/output/results.csv   # 8. full report
 #    then derive results_scored.csv = rows with a raw_response (reviewers use this)
+dsar audit verify                             # 9. chain intact; note the head hash in the case file
 ```
+
+Progress of a long `ingest`, `manifest` or `classify` is in `output/progress.json` (done, total, rate, ETA). `dsar audit show` lists runs with no end entry, which means the run is still going or was killed.
 
 Before step 6, check `max(length(content))` for in-scope chunks; anything far over `chunking.max_chars` gets truncated by Ollama and the model summarises instead of scoring.
 
-Hash `dsar.sqlite`, every output and every SQL script you run, and log them.
+The commands hash `dsar.sqlite` and their outputs into the audit log. Hash any SQL script you run by hand, and log it with `dsar audit note`.
 
 ## 3. Ollama run-book (before any classify)
 

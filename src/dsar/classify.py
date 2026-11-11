@@ -3,7 +3,7 @@ import logging
 import os
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -55,6 +55,9 @@ class UsageTotals:
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
     requests: int = 0
+    evidence_retries: int = 0
+    failed: int = 0
+    failed_chunk_ids: list[str] = field(default_factory=list)
 
 
 def parse_response(raw: str) -> ParsedResponse:
@@ -119,8 +122,8 @@ async def classify_all(
 ) -> UsageTotals:
     import httpx  # lazy import
 
-    base_url = os.environ.get("OLLAMA_URL", DEFAULT_OLLAMA_URL)
-    ids = db.unclassified_chunk_ids(conn, limit=limit, in_scope=in_scope)
+    base_url = ollama_url()
+    ids =db.unclassified_chunk_ids(conn, limit=limit, in_scope=in_scope)
     totals = UsageTotals()
     sem = asyncio.Semaphore(concurrency)
 
@@ -168,6 +171,7 @@ async def classify_all(
                     # more with the failure stated; keep whichever answer verifies,
                     # else the first. `dsar report` shows the check for every row.
                     if evidence.verify(parsed.score, parsed.evidence, row["content"], row["subject"]) in (evidence.NO, evidence.MISSING):
+                        totals.evidence_retries += 1
                         retry = await client.post("/api/chat", json={
                             "model": model,
                             "messages": [
@@ -218,9 +222,32 @@ async def classify_all(
                     # other worker. Log and move on — the chunk stays unclassified
                     # and can be retried by re-running `dsar classify`.
                     log.warning("classify failed for chunk %s: %s", chunk_id, exc)
+                    totals.failed += 1
+                    totals.failed_chunk_ids.append(chunk_id)
 
         await asyncio.gather(*(worker(cid) for cid in ids), return_exceptions=True)
     return totals
+
+
+def ollama_url() -> str:
+    return os.environ.get("OLLAMA_URL", DEFAULT_OLLAMA_URL)
+
+
+def ollama_info(model: str) -> dict:
+    """Ollama server version and the model's digest, for the audit log. Never raises."""
+    import httpx  # lazy import
+
+    info: dict = {"url": ollama_url(), "version": None, "model": model, "digest": None}
+    names = {model, f"{model}:latest"}
+    try:
+        with httpx.Client(base_url=info["url"], timeout=10.0) as client:
+            info["version"] = client.get("/api/version").json().get("version")
+            for m in client.get("/api/tags").json().get("models", []):
+                if m.get("name") in names or m.get("model") in names:
+                    info["digest"] = m.get("digest")
+    except Exception as exc:
+        info["error"] = str(exc)
+    return info
 
 
 def load_system_prompt(path: str | Path = "claude.md") -> str:
