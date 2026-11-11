@@ -107,13 +107,14 @@ def context_text(name: str, max_chars: int, marker_first: bool) -> str:
     return "From: HR\nTo: Line Managers\nSubject: Monthly update\n\n" + "\n\n".join(body)
 
 
-class _Model:
+class ModelClient:
     """One configured model on one Ollama server, called exactly as classify calls it."""
 
     def __init__(self, client, cfg: Config, system_prompt: str):
         self.client, self.cfg, self.system_prompt = client, cfg, system_prompt
 
-    async def classify(self, text: str, source_type: str = "email", source_path: str = "model-check") -> dict:
+    async def classify(self, text: str, source_type: str = "email", source_path: str = "model-check",
+                       subject: str | None = None) -> dict:
         user = build_user_prompt(source_type, source_path, self.cfg.subject.name, text)
         t0 = time.monotonic()
         resp = await self.client.post("/api/chat", json=chat_request(
@@ -126,7 +127,7 @@ class _Model:
             "score": parsed.score,
             "special_return": parsed.special_return,
             "evidence": parsed.evidence,
-            "evidence_in_source": evidence.verify(parsed.score, parsed.evidence, text, None),
+            "evidence_in_source": evidence.verify(parsed.score, parsed.evidence, text, subject),
             "raw": parsed.raw.strip(),
             "seconds": round(time.monotonic() - t0, 2),
             "prompt_tokens": body.get("prompt_eval_count"),
@@ -139,7 +140,7 @@ def _evidence_ok(r: dict) -> bool:
         r["evidence_in_source"] in (evidence.YES, evidence.PARTIAL)
 
 
-async def _run(model: _Model, cfg: Config, sample: list[dict], pending: int | None) -> dict:
+async def _run(model: ModelClient, cfg: Config, sample: list[dict], pending: int | None) -> dict:
     name = cfg.subject.name
     golden = []
     for g in GOLDEN:
@@ -262,7 +263,7 @@ def evaluate(results: dict, info: dict, loaded: dict | None, cfg: Config) -> lis
 async def _with_client(make_client: Callable, cfg: Config, system_prompt: str,
                        sample: list[dict], pending: int | None) -> dict:
     async with make_client() as client:
-        return await _run(_Model(client, cfg, system_prompt), cfg, sample, pending)
+        return await _run(ModelClient(client, cfg, system_prompt), cfg, sample, pending)
 
 
 def run(make_client: Callable, cfg: Config, system_prompt: str, info: dict, get_loaded: Callable[[], dict | None],

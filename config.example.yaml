@@ -36,6 +36,13 @@ model_check:
   min_chunks_per_minute: 2.0   # below this is a warning: plan the run time
   sample_size: 6               # pending case chunks timed for the run-time estimate
 
+# `dsar qa classify` thresholds.
+qa:
+  max_unparseable_rate: 0.02   # responses that are neither a score nor a special return
+  rescore_sample: 10           # classifications re-scored to measure consistency
+  min_rescore_agreement: 0.8   # share of re-scores within ±1 of the original score
+  sample_per_band: 10          # rows per band (0-4, 5-6, 7-10, special) in the human QA workbook
+
 # Provenance labels (per case). Descriptive only — nothing is excluded.
 # `match` is a glob relative to $DSAR_DATA_DIR/input; first match wins.
 # Unmatched files are labelled "Primary source (Purview export)".

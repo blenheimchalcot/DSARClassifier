@@ -32,6 +32,8 @@ dsar classify --plan --config <case config>   # 5. check scope and chunk counts
 dsar model-check     --config <case config>   # 5a. model accuracy, context window, speed + run-time estimate
 dsar classify        --config <case config>   # 6. score (evidence checked, one retry)
 dsar verify-evidence                          # 7. re-check every score 7+ quote
+dsar qa classify     --config <case config>   # 7a. validate classifications; sends a sample workbook to a reviewer
+dsar qa import-sample <case>/output/qa_sample_<time>.xlsx   # 7b. when the reviewer returns it
 dsar report --out <case>/output/results.csv   # 8. full report
 #    then derive results_scored.csv = rows with a raw_response (reviewers use this)
 dsar audit verify                             # 9. chain intact; note the head hash in the case file
@@ -42,6 +44,8 @@ Progress of a long `ingest`, `manifest` or `classify` is in `output/progress.jso
 `dsar qa ingest` (step 4a) replaces the manual post-ingest checks. It fails if any file under `input/` has no chunks and no skip record, if a reader errored, if an item in Purview's report is missing from disk, or if an in-scope chunk is over `chunking.max_chars` (Ollama would truncate it). It warns on items Purview itself failed to export, PST emails in Purview's report not found by Message-ID (sent items and drafts can lack the header, so check before acting), and documents that gave almost no text for their size (scanned or protected: read them by hand). Findings are in `output/qa_ingest_<time>.csv`; log what you decided about each WARN with `dsar audit note`.
 
 `dsar classify` refuses to start without a passing `dsar qa ingest` for the current database, and a passing `dsar model-check` for the current model digest, system prompt, `max_tokens` and `temperature`, so editing the prompt or updating the model means a new check. The check scores synthetic examples across the scale (the subject's name substituted in), sends a full-size chunk with a sensitive sentence first and then last to catch truncation, checks format and repeatability, and times pending case chunks to estimate the run. It writes `output/model_check_<time>.json` and never writes to the case database. `--skip-checks "<reason>"` overrides the gate; the reason is audit-logged.
+
+`dsar qa classify` (step 7a) checks what `verify-evidence` can't: unparseable responses (FAIL above `qa.max_unparseable_rate`), in-scope chunks still unclassified, score 7+ quotes not fully in the source, chunks scored under 5 that mention health, criminal or other special-category matters (possible missed personal data: read each one), score distribution by custodian and source type, and consistency (a sample re-scored with the same request; FAIL if under `qa.min_rescore_agreement` land within ±1). It writes `output/qa_classify_<time>.csv` and a reviewer workbook `output/qa_sample_<time>.xlsx` holding a random sample from every score band. The reviewer scores each row blind; `dsar qa import-sample` measures their agreement with the model and logs it. Model scores are never changed by QA.
 
 The commands hash `dsar.sqlite` and their outputs into the audit log. Hash any SQL script you run by hand, and log it with `dsar audit note`.
 

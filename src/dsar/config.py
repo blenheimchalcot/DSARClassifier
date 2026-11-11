@@ -33,6 +33,15 @@ class ModelCheckSettings:
 
 
 @dataclass
+class QASettings:
+    # Thresholds for `dsar qa classify`.
+    max_unparseable_rate: float = 0.02   # responses that are neither a score nor a special return
+    rescore_sample: int = 10             # classifications re-scored to measure consistency
+    min_rescore_agreement: float = 0.8   # share of re-scores within ±1 of the original
+    sample_per_band: int = 10            # per band (0-4, 5-6, 7-10, special) for the human QA workbook
+
+
+@dataclass
 class ChunkingSettings:
     max_chars: int
     overlap_chars: int
@@ -67,6 +76,7 @@ class Config:
     provenance: list[ProvenanceRule] = field(default_factory=list)
     classify_scope: ClassifyScope = field(default_factory=ClassifyScope)
     model_check: ModelCheckSettings = field(default_factory=ModelCheckSettings)
+    qa: QASettings = field(default_factory=QASettings)
 
 
 def load_config(path: str | Path = "config.yaml") -> Config:
@@ -78,4 +88,5 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         provenance=[ProvenanceRule(**r) for r in raw.get("provenance") or []],
         classify_scope=ClassifyScope(**(raw.get("classify_scope") or {})),
         model_check=ModelCheckSettings(**(raw.get("model_check") or {})),
+        qa=QASettings(**(raw.get("qa") or {})),
     )

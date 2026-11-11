@@ -44,6 +44,8 @@ dsar classify --plan        # 5. check scope
 dsar model-check            # 5a. test the model (accuracy, context window, speed); classify needs a pass
 dsar classify               # 6. score with the local model (score 7+ evidence is checked; one retry if not in source)
 dsar verify-evidence        # 7. re-check every score 7+ quote; --supersede withdraws failures for re-scoring
+dsar qa classify            # 7a. validate classifications; writes a reviewer sample workbook
+dsar qa import-sample <xlsx>  #   reviewer agreement with the model, once the workbook comes back
 dsar report                 # 8. output/results.csv (column evidence_in_source: yes / partial / no / missing)
 dsar audit verify           # 9. check the audit log; record the head hash outside the machine
 ```
