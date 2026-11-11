@@ -4,6 +4,12 @@ Local pipeline for GDPR / UK GDPR Data Subject Access Requests over Microsoft Pu
 
 Everything runs on the operator's machine. No subject data leaves it.
 
+## Documentation
+
+- [docs/OPERATIONS.md](docs/OPERATIONS.md): operating rules and run-book. Read before any case.
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): building it on a new machine or server, including for another organisation.
+- [docs/MOVING_LAPTOP.md](docs/MOVING_LAPTOP.md): moving the operator's setup and live cases to another laptop.
+
 ## Data handling rules
 
 - Case data lives **outside** any cloud-synced folder, one directory per case: `<root>/<CASE-REF>/data/{input,output}`. Point `DSAR_DATA_DIR` in `.env` at it.
@@ -17,6 +23,8 @@ Everything runs on the operator's machine. No subject data leaves it.
 cp .env.example .env                       # set DSAR_DATA_DIR
 cp config.example.yaml config.yaml         # subject name, aliases, emails, provenance rules
 cp claude_strict.example.md claude_strict.md
+cp CLAUDE.example.md CLAUDE.md               # optional: instructions for Claude Code
+pip install -r requirements.lock && pip install -e . --no-deps
 
 # 1. Put the unextracted Purview ZIPs in input/, hash them, extract to
 #    input/PSTs, input/Files, input/metadata, then hash the extracted files

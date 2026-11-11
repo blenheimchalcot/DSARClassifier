@@ -38,6 +38,7 @@ dsar = "dsar.cli:main"
 where = ["src"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = [
     "live: tests that call the live Claude API (opt-in, cost money)",
 ]
