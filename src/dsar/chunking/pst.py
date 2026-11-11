@@ -50,25 +50,51 @@ class RawMessage:
         return (0, self.sent_iso) if self.sent_iso else (1, self.identifier)
 
 
+def _archive_messages(pst_path: Path):
+    """Every message in a PST, folder by folder.
+
+    Same walk as libratom's `PffArchive.messages()` (which this replaced: libratom
+    pins old exact versions of ~15 packages and pulls in spaCy, so it cannot be
+    installed alongside current ones). Keeping its order keeps ingest output
+    identical for existing cases.
+    """
+    import logging
+    from collections import deque
+    import pypff  # lazy import
+
+    log = logging.getLogger(__name__)
+    pff = pypff.file()
+    pff.open(str(pst_path), "rb")
+    try:
+        folders = deque([pff.root_folder])
+        while folders:
+            folder = folders.pop()
+            try:
+                yield from folder.sub_messages
+            except OSError as exc:
+                log.debug("unreadable folder in %s: %s", pst_path, exc)
+            folders.extendleft(folder.sub_folders)
+    finally:
+        pff.close()
+
+
 def iter_messages(pst_paths: list[Path]) -> Iterator[RawMessage]:
-    """Walk every .pst via libratom and yield a normalised RawMessage per email.
+    """Walk every .pst via pypff and yield a normalised RawMessage per email.
 
     Real-world PSTs contain occasional corrupt records that pypff can't parse;
     we skip those individually rather than aborting the whole archive.
     """
     import logging
-    from libratom.lib.pff import PffArchive  # lazy import
 
     log = logging.getLogger(__name__)
 
     for pst_path in pst_paths:
-        with PffArchive(str(pst_path)) as archive:
-            for message in archive.messages():
-                try:
-                    yield _to_raw(pst_path, message)
-                except Exception as exc:
-                    log.warning("skipping bad message in %s: %s", pst_path, exc)
-                    continue
+        for message in _archive_messages(pst_path):
+            try:
+                yield _to_raw(pst_path, message)
+            except Exception as exc:
+                log.warning("skipping bad message in %s: %s", pst_path, exc)
+                continue
 
 
 def _to_raw(pst_path: Path, message) -> RawMessage:

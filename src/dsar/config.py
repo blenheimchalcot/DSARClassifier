@@ -17,6 +17,9 @@ class ModelSettings:
     max_tokens: int
     temperature: float
     concurrency: int
+    # Digest the model was validated with (`ollama list`, 12+ hex chars). `dsar doctor`
+    # fails if the installed model differs, so a silent model update can't change results.
+    expected_digest: str | None = None
 
 
 @dataclass

@@ -36,7 +36,7 @@ python -m pytest -q          # expect all tests to pass
 dsar --help
 ```
 
-`libratom` needs `libpff` (pypff). If wheels aren't available for the platform, install build tools first (Linux: `build-essential python3-dev`; macOS: Xcode command-line tools).
+PSTs are read with `libpff-python` (pypff). If no wheel exists for the platform it is compiled during install, so install build tools first (Linux: `build-essential python3-dev`; macOS: Xcode command-line tools). `libratom` is no longer used: it pinned old versions of many packages and could not be installed alongside the rest.
 
 The repo is private: the server needs a GitHub account with access, or copy a release archive (`git archive --format=zip -o DSARClassifier.zip main`) onto it.
 
@@ -73,7 +73,16 @@ dsar classify --config /srv/dsar/<CASE-REF>/data/config.yaml \
 
 (With no `--system-prompt`, `claude_strict.md` in the current directory is used.)
 
-Fill in the subject's name, aliases and emails in both files, mirroring the Purview KQL. Then start `output/AUDIT_LOG.md` (header: case ref, subject, controller legal entity, operator, machine, data dir) and follow the run order in OPERATIONS §2.
+Fill in the subject's name, aliases and emails in both files, mirroring the Purview KQL. Then check the machine:
+
+```sh
+dsar doctor --config /srv/dsar/<CASE-REF>/data/config.yaml \
+            --system-prompt /srv/dsar/<CASE-REF>/data/claude_strict.md
+```
+
+It checks Python and every reader library, package versions against `requirements.lock`, that Ollama is local and not reachable from the network, the model and its digest (`model.expected_digest`), the context window and parallelism, that the data dir exists, is outside synced folders and is private, disk space, full-disk encryption, RAM, and that the config and prompt have no `<PLACEHOLDER>`s left. Fix every FAIL; decide on every WARN. The result goes into the case audit log.
+
+Then record the case header with `dsar audit note "Case <CASE-REF>: controller <legal entity>, operator <name>, machine <host>"` and follow the run order in OPERATIONS §2.
 
 ## 5. Claude Code on the new machine (optional)
 
@@ -84,7 +93,7 @@ Copy `CLAUDE.example.md` to `CLAUDE.md` in the code folder and fill in the subje
 - [ ] Clean clone; `git status` shows nothing case-specific
 - [ ] Tests pass; `dsar --help` works
 - [ ] Ollama running with `OLLAMA_CONTEXT_LENGTH=8192`, `OLLAMA_NUM_PARALLEL` = `model.concurrency`, bound to localhost
-- [ ] Model digest recorded
 - [ ] Case dir outside synced folders, `chmod 700`, `.env` points at it
 - [ ] Case config + prompt filled in, inside the case dir
-- [ ] AUDIT_LOG.md started; Purview ZIPs hashed before extraction
+- [ ] `dsar doctor` shows no FAIL (logged to the case audit log)
+- [ ] Case header noted (`dsar audit note`); Purview ZIPs hashed before extraction (`dsar manifest`)

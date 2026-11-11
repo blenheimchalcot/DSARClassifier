@@ -716,6 +716,43 @@ def manifest_cmd(stage: str | None, force_new: bool, run: audit.Run) -> None:
                                    + ", ".join(changed[:5]))
 
 
+@main.command(name="doctor")
+@click.option("--config", "config_path", default=DEFAULT_CONFIG, show_default=True)
+@click.option("--system-prompt", default=DEFAULT_SYSTEM_PROMPT, show_default=True)
+def doctor_cmd(config_path: str, system_prompt: str) -> None:
+    """Check this machine is set up to run a case: packages, Ollama, model, data dir, encryption."""
+    import httpx
+    from dsar import doctor
+    from dsar.classify import ollama_url
+
+    base_url = ollama_url()
+
+    def get(path: str) -> dict:
+        r = httpx.get(base_url + path, timeout=10.0)
+        r.raise_for_status()
+        return r.json()
+
+    checks = doctor.run_all(Path(config_path), Path(system_prompt), os.environ.get("DSAR_DATA_DIR"), base_url, get)
+    width = max(len(c.name) for c in checks)
+    for c in checks:
+        colour = {doctor.PASS: "green", doctor.WARN: "yellow", doctor.FAIL: "red"}[c.status]
+        click.echo(f"  {click.style(c.status, fg=colour)}  {c.name:<{width}}  {c.detail}")
+    fails = [c for c in checks if c.status == doctor.FAIL]
+    warns = [c for c in checks if c.status == doctor.WARN]
+    click.echo(f"{len(checks)} checks: {len(fails)} fail, {len(warns)} warn")
+
+    # Log to the case audit log when there is a usable case dir to log into.
+    raw = os.environ.get("DSAR_DATA_DIR")
+    if raw and Path(raw).expanduser().is_dir():
+        audit.AuditLog(Path(raw).expanduser() / "output").append("check", "doctor", {
+            "status": "failed" if fails else "ok",
+            "code": audit.code_version(),
+            "results": {c.name: f"{c.status}: {c.detail}" for c in checks},
+        })
+    if fails:
+        raise click.ClickException("fix the FAIL items before running a case")
+
+
 @main.group(name="audit")
 def audit_group() -> None:
     """Read, verify and annotate the case audit log (output/AUDIT_LOG.*)."""
