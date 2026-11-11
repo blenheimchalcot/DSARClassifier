@@ -1,8 +1,10 @@
 import asyncio
 import functools
 import gc
+import json
 import os
 import time
+from collections import Counter
 from datetime import date
 from pathlib import Path
 
@@ -634,6 +636,94 @@ def qa_ingest_cmd(db_path: str | None, config_path: str, run: audit.Run) -> None
     run.hash_file(csv_path.name, csv_path)
     if not s["passed"]:
         raise click.ClickException(f"ingest QA failed ({s['fail']} FAIL finding(s)); see {csv_path.name}")
+
+
+@qa_group.command(name="classify")
+@click.option("--db-path", default=None, help="SQLite path. Defaults to $DSAR_DATA_DIR/dsar.sqlite.")
+@click.option("--config", "config_path", default=DEFAULT_CONFIG, show_default=True)
+@click.option("--system-prompt", default=DEFAULT_SYSTEM_PROMPT, show_default=True)
+@click.option("--rescore", type=int, default=None, help="Classifications to re-score for consistency (default: qa.rescore_sample; 0 = skip).")
+@_audited("qa classify")
+def qa_classify_cmd(db_path: str | None, config_path: str, system_prompt: str, rescore: int | None,
+                    run: audit.Run) -> None:
+    """Validate classifications: format, coverage, evidence, missed special categories, consistency, and a
+    stratified sample workbook for a human reviewer. Run after `dsar verify-evidence`."""
+    import httpx
+    from dsar import qa_classify
+    from dsar.classify import ollama_url
+
+    data_dir = _data_dir()
+    if db_path is None:
+        db_path = str(data_dir / "dsar.sqlite")
+    if not Path(db_path).exists():
+        raise click.ClickException(f"{db_path} not found")
+    cfg = load_config(config_path)
+    n_rescore = cfg.qa.rescore_sample if rescore is None else rescore
+    with db.connect(db_path) as conn:
+        db.init_schema(conn)
+        try:
+            in_scope = provenance.scope_filter(conn, data_dir / "input", cfg.classify_scope)
+        except ValueError as exc:
+            raise click.ClickException(str(exc))
+        result = qa_classify.analyse(conn, cfg, in_scope)
+
+    checks = list(result["checks"])
+    rescored: list[dict] = []
+    if n_rescore > 0:
+        base = ollama_url()
+        click.echo(f"Re-scoring {n_rescore} classifications with {cfg.model.default}...")
+        check, rescored = qa_classify.consistency(
+            lambda: httpx.AsyncClient(base_url=base, timeout=300.0), cfg, load_system_prompt(system_prompt),
+            result["rows"], n_rescore)
+        checks.append(check)
+        run.data["ollama"] = ollama_info(cfg.model.default)
+    else:
+        checks.append({"name": "Consistency", "status": qa_classify.WARN, "detail": "skipped (--rescore 0)"})
+
+    sample = qa_classify.stratified_sample(result["rows"], cfg.qa.sample_per_band)
+    sample_path = data_dir / "output" / f"qa_sample_{qa_classify.stamp()}.xlsx"
+    qa_classify.write_sample(sample, sample_path)
+    json_path, csv_path = qa_classify.write_outputs(result, checks, rescored, data_dir / "output")
+
+    width = max(len(c["name"]) for c in checks)
+    for c in checks:
+        colour = {qa_classify.PASS: "green", qa_classify.WARN: "yellow", qa_classify.FAIL: "red"}[c["status"]]
+        click.echo(f"  {click.style(c['status'], fg=colour)}  {c['name']:<{width}}  {c['detail']}")
+    click.echo(f"Findings: {csv_path}")
+    click.echo(f"Reviewer sample ({len(sample)} rows): {sample_path}  -> `dsar qa import-sample` when returned")
+    passed = not any(c["status"] == qa_classify.FAIL for c in checks)
+    run.data.update(passed=passed, stats={k: v for k, v in result["stats"].items() if not k.startswith("by_")},
+                    checks={c["name"]: f"{c['status']}: {c['detail']}" for c in checks},
+                    findings=dict(Counter(f"{f['check']} {f['severity']}" for f in result["findings"])),
+                    sample_rows=len(sample))
+    for p in (json_path, csv_path, sample_path):
+        run.hash_file(p.name, p)
+    if not passed:
+        raise click.ClickException("classification QA failed; see the checks above")
+
+
+@qa_group.command(name="import-sample")
+@click.argument("workbook", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@_audited("qa import-sample")
+def qa_import_sample_cmd(workbook: Path, run: audit.Run) -> None:
+    """Measure reviewer-vs-model agreement on a returned QA sample workbook."""
+    from dsar import qa_classify
+
+    result = qa_classify.import_sample(workbook)
+    out = _data_dir() / "output" / f"qa_sample_results_{qa_classify.stamp()}.json"
+    out.write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
+    click.echo(f"Reviewed {result['reviewed']} (outstanding {result['outstanding']}) by {', '.join(result['reviewers']) or '?'}")
+    click.echo(f"  agreement: exact {result['agreement_exact']}, within ±1 {result['agreement_within_1']}, "
+               f"same side of 7 {result['agreement_same_side_of_7']}")
+    for b, s in sorted(result["per_band"].items()):
+        click.echo(f"  {b:>7}: {s}")
+    click.echo(f"  {len(result['disagreements'])} disagreement(s) beyond ±1 -> {out}")
+    run.data.update({k: v for k, v in result.items() if k != "disagreements"},
+                    disagreements=len(result["disagreements"]), result=out.name)
+    run.hash_file(workbook.name, workbook)
+    run.hash_file(out.name, out)
+    if result["outstanding"]:
+        run.warn(f"{result['outstanding']} sample row(s) not yet reviewed")
 
 
 @main.command(name="attachments")
