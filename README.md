@@ -40,6 +40,7 @@ dsar attachments            # 2. extract + catalogue every PST attachment (appen
 dsar ingest                 # 3. chunk everything into dsar.sqlite
 dsar provenance             # 4. verify against the manifest, link to Purview custodian/location
 dsar classify --plan        # 5. check scope
+dsar model-check            # 5a. test the model (accuracy, context window, speed); classify needs a pass
 dsar classify               # 6. score with the local model (score 7+ evidence is checked; one retry if not in source)
 dsar verify-evidence        # 7. re-check every score 7+ quote; --supersede withdraws failures for re-scoring
 dsar report                 # 8. output/results.csv (column evidence_in_source: yes / partial / no / missing)

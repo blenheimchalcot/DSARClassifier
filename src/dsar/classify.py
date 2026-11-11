@@ -107,6 +107,25 @@ def build_user_prompt(source_type: str, source_path: str, subject_name: str, con
     )
 
 
+def chat_request(model: str, system_prompt: str, messages: list[dict], *,
+                 max_tokens: int, temperature: float) -> dict:
+    """Body for Ollama's /api/chat. Shared by classify and model-check so both send the same request."""
+    return {
+        "model": model,
+        "messages": [{"role": "system", "content": system_prompt}, *messages],
+        "stream": False,
+        # Gemma 4 (and other reasoning-capable models) emit hidden
+        # `thinking` tokens by default, which consume the budget
+        # before any visible content is produced. We want a single
+        # pipe-delimited line, not chain-of-thought.
+        "think": False,
+        "options": {
+            "temperature": temperature,
+            "num_predict": max_tokens,
+        },
+    }
+
+
 async def classify_all(
     conn: sqlite3.Connection,
     *,
@@ -123,7 +142,7 @@ async def classify_all(
     import httpx  # lazy import
 
     base_url = ollama_url()
-    ids =db.unclassified_chunk_ids(conn, limit=limit, in_scope=in_scope)
+    ids = db.unclassified_chunk_ids(conn, limit=limit, in_scope=in_scope)
     totals = UsageTotals()
     sem = asyncio.Semaphore(concurrency)
 
@@ -140,23 +159,9 @@ async def classify_all(
                         subject_name=subject_name,
                         context=row["content"],
                     )
-                    resp = await client.post("/api/chat", json={
-                        "model": model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        "stream": False,
-                        # Gemma 4 (and other reasoning-capable models) emit hidden
-                        # `thinking` tokens by default, which consume the budget
-                        # before any visible content is produced. We want a single
-                        # pipe-delimited line, not chain-of-thought.
-                        "think": False,
-                        "options": {
-                            "temperature": temperature,
-                            "num_predict": max_tokens,
-                        },
-                    })
+                    resp = await client.post("/api/chat", json=chat_request(
+                        model, system_prompt, [{"role": "user", "content": user_prompt}],
+                        max_tokens=max_tokens, temperature=temperature))
                     resp.raise_for_status()
                     body = resp.json()
                     text = body["message"]["content"]
@@ -172,18 +177,12 @@ async def classify_all(
                     # else the first. `dsar report` shows the check for every row.
                     if evidence.verify(parsed.score, parsed.evidence, row["content"], row["subject"]) in (evidence.NO, evidence.MISSING):
                         totals.evidence_retries += 1
-                        retry = await client.post("/api/chat", json={
-                            "model": model,
-                            "messages": [
-                                {"role": "system", "content": system_prompt},
+                        retry = await client.post("/api/chat", json=chat_request(
+                            model, system_prompt, [
                                 {"role": "user", "content": user_prompt},
                                 {"role": "assistant", "content": text},
                                 {"role": "user", "content": RETRY_PROMPT},
-                            ],
-                            "stream": False,
-                            "think": False,
-                            "options": {"temperature": temperature, "num_predict": max_tokens},
-                        })
+                            ], max_tokens=max_tokens, temperature=temperature))
                         retry.raise_for_status()
                         rbody = retry.json()
                         rparsed = parse_response(rbody["message"]["content"])

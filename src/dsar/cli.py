@@ -396,9 +396,11 @@ def ingest(input_dir: Path | None, db_path: str | None, config_path: str, run: a
 @click.option("--model", default=None, help="Override model from config.yaml.")
 @click.option("--limit", type=int, default=None, help="Classify at most N chunks (for dry-runs).")
 @click.option("--plan", is_flag=True, help="Print in-scope / out-of-scope counts per provenance label and exit.")
+@click.option("--skip-checks", "skip_checks", default=None, metavar="REASON",
+              help="Run without the pre-classification checks (model check); the reason is audit-logged.")
 @_audited("classify")
 def classify(db_path: str | None, config_path: str, system_prompt: str, model: str | None,
-             limit: int | None, plan: bool, run: audit.Run) -> None:
+             limit: int | None, plan: bool, skip_checks: str | None, run: audit.Run) -> None:
     """Classify every alias-matched, in-scope chunk that hasn't been classified yet."""
     data_dir = _data_dir()
     if db_path is None:
@@ -441,7 +443,8 @@ def classify(db_path: str | None, config_path: str, system_prompt: str, model: s
     run.data.update(scope=scope_desc, pending_at_start=pending, ollama=ollama_info(chosen_model),
                     settings={"max_tokens": cfg.model.max_tokens, "temperature": cfg.model.temperature,
                               "concurrency": cfg.model.concurrency})
-    progress = audit.Progress(data_dir / "output", "classify", pending)
+    _require_checks(run, data_dir, cfg, sys_prompt, chosen_model, skip_checks)
+    progress =audit.Progress(data_dir / "output", "classify", pending)
 
     def _progress(chunk_id: str, parsed, totals) -> None:
         label = parsed.special_return or f"score={parsed.score}"
@@ -479,6 +482,101 @@ def classify(db_path: str | None, config_path: str, system_prompt: str, model: s
         run.data["failed_chunk_ids"] = totals.failed_chunk_ids[:AUDIT_ERROR_LIMIT]
         run.warn(f"{totals.failed} chunk(s) failed and stay unclassified")
     run.hash_file("dsar.sqlite", db_path)
+
+
+def _require_checks(run: audit.Run, data_dir: Path, cfg, sys_prompt: str, chosen_model: str,
+                    skip_checks: str | None) -> None:
+    """Refuse to classify without a passing model check for this exact model build, prompt and settings."""
+    from dsar import model_check
+
+    if chosen_model != cfg.model.default:
+        cfg = _with_model(cfg, chosen_model)
+    fp = model_check.fingerprint(cfg, sys_prompt, run.data["ollama"].get("digest"))
+    passing = model_check.latest_pass(data_dir / "output", fp)
+    if passing is not None:
+        run.data["model_check"] = passing.name
+        click.echo(f"Model check: {passing.name}")
+        return
+    if skip_checks:
+        run.data["checks_skipped"] = skip_checks
+        run.warn(f"model check skipped: {skip_checks}")
+        click.echo(f"Model check SKIPPED: {skip_checks}", err=True)
+        return
+    raise click.ClickException(
+        "no passing `dsar model-check` for this model build, system prompt and settings. "
+        "Run `dsar model-check` first, or pass --skip-checks \"<reason>\" (audit-logged).")
+
+
+def _with_model(cfg, model: str):
+    """Config with `--model` applied, so the check fingerprint names the model actually used."""
+    from dataclasses import replace
+    return replace(cfg, model=replace(cfg.model, default=model))
+
+
+@main.command(name="model-check")
+@click.option("--db-path", default=None, help="SQLite path. Defaults to $DSAR_DATA_DIR/dsar.sqlite.")
+@click.option("--config", "config_path", default=DEFAULT_CONFIG, show_default=True)
+@click.option("--system-prompt", default=DEFAULT_SYSTEM_PROMPT, show_default=True)
+@_audited("model-check")
+def model_check_cmd(db_path: str | None, config_path: str, system_prompt: str, run: audit.Run) -> None:
+    """Test the model before classifying: accuracy, context window, format, determinism, speed.
+
+    Run after ingest (so the speed test uses this case's chunks and estimates
+    its run time) and before classify, which refuses to start without a pass.
+    """
+    import httpx
+    from dsar import model_check
+    from dsar.classify import ollama_url
+
+    data_dir = _data_dir()
+    if db_path is None:
+        db_path = str(data_dir / "dsar.sqlite")
+    cfg = load_config(config_path)
+    sys_prompt = load_system_prompt(system_prompt)
+    base = ollama_url()
+    info = ollama_info(cfg.model.default)
+    run.data["ollama"] = info
+    if not info.get("digest"):
+        raise click.ClickException(f"{cfg.model.default} not available on {base}: "
+                                   f"{info.get('error', 'not installed')} (see `dsar doctor`)")
+    names = {cfg.model.default, f"{cfg.model.default}:latest"}
+
+    def get_loaded() -> dict | None:
+        try:
+            models = httpx.get(base + "/api/ps", timeout=10.0).json().get("models", [])
+        except Exception:
+            return None
+        return next((m for m in models if m.get("name") in names or m.get("model") in names), None)
+
+    def make_client():
+        return httpx.AsyncClient(base_url=base, timeout=300.0)
+
+    click.echo(f"Checking {cfg.model.default} ({info['digest'][:12]}) on {base}; this takes a few minutes...")
+    if Path(db_path).exists():
+        with db.connect(db_path) as conn:
+            db.init_schema(conn)
+            try:
+                in_scope = provenance.scope_filter(conn, data_dir / "input", cfg.classify_scope)
+            except ValueError as exc:
+                run.warn(f"scope unavailable ({exc}); timing all pending chunks")
+                in_scope = None
+            result = model_check.run(make_client, cfg, sys_prompt, info, get_loaded, conn, in_scope)
+    else:
+        run.warn("no case database yet: speed measured on golden examples, no run-time estimate")
+        result = model_check.run(make_client, cfg, sys_prompt, info, get_loaded)
+
+    width = max(len(c["name"]) for c in result["checks"])
+    for c in result["checks"]:
+        colour = {model_check.PASS: "green", model_check.WARN: "yellow", model_check.FAIL: "red"}[c["status"]]
+        click.echo(f"  {click.style(c['status'], fg=colour)}  {c['name']:<{width}}  {c['detail']}")
+    path = model_check.write_result(result, data_dir / "output")
+    click.echo(f"Result: {path}")
+    run.data.update(passed=result["passed"], result=path.name,
+                    checks={c["name"]: f"{c['status']}: {c['detail']}" for c in result["checks"]},
+                    throughput=result["throughput"])
+    run.hash_file(path.name, path)
+    if not result["passed"]:
+        raise click.ClickException("model check failed; `dsar classify` will not run until it passes")
 
 
 @main.command(name="attachments")

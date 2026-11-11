@@ -39,6 +39,8 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Live tests call the local Ollama model and take minutes: opt in with `pytest -m live`.
+addopts = "-m 'not live'"
 markers = [
-    "live: tests that call the live Claude API (opt-in, cost money)",
+    "live: tests that call the live Ollama model (opt-in, slow)",
 ]
