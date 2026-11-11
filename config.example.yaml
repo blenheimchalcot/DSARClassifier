@@ -28,6 +28,14 @@ model:
   # Validated model digest (`ollama list`). `dsar doctor` fails on any other build.
   expected_digest: "c6eb396dbd59"
 
+# `dsar model-check` thresholds. `dsar classify` refuses to run without a passing
+# check for the current model digest, system prompt, max_tokens and temperature.
+model_check:
+  min_accuracy: 0.8            # share of synthetic golden examples scored in band
+  min_format_rate: 1.0         # share of responses that parse
+  min_chunks_per_minute: 2.0   # below this is a warning: plan the run time
+  sample_size: 6               # pending case chunks timed for the run-time estimate
+
 # Provenance labels (per case). Descriptive only — nothing is excluded.
 # `match` is a glob relative to $DSAR_DATA_DIR/input; first match wins.
 # Unmatched files are labelled "Primary source (Purview export)".

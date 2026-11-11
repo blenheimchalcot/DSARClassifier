@@ -28,6 +28,7 @@ dsar ingest      --config <case config>   # 3. chunk into dsar.sqlite
 dsar provenance  --config <case config>   # 4. verify against manifest; custodian/location per file
 #    -> review other-DSAR material with the operator, set provenance labels + classify_scope
 dsar classify --plan --config <case config>   # 5. check scope and chunk counts
+dsar model-check     --config <case config>   # 5a. model accuracy, context window, speed + run-time estimate
 dsar classify        --config <case config>   # 6. score (evidence checked, one retry)
 dsar verify-evidence                          # 7. re-check every score 7+ quote
 dsar report --out <case>/output/results.csv   # 8. full report
@@ -38,6 +39,8 @@ dsar audit verify                             # 9. chain intact; note the head h
 Progress of a long `ingest`, `manifest` or `classify` is in `output/progress.json` (done, total, rate, ETA). `dsar audit show` lists runs with no end entry, which means the run is still going or was killed.
 
 Before step 6, check `max(length(content))` for in-scope chunks; anything far over `chunking.max_chars` gets truncated by Ollama and the model summarises instead of scoring.
+
+`dsar classify` refuses to start without a passing `dsar model-check` for the current model digest, system prompt, `max_tokens` and `temperature`, so editing the prompt or updating the model means a new check. The check scores synthetic examples across the scale (the subject's name substituted in), sends a full-size chunk with a sensitive sentence first and then last to catch truncation, checks format and repeatability, and times pending case chunks to estimate the run. It writes `output/model_check_<time>.json` and never writes to the case database. `--skip-checks "<reason>"` overrides the gate; the reason is audit-logged.
 
 The commands hash `dsar.sqlite` and their outputs into the audit log. Hash any SQL script you run by hand, and log it with `dsar audit note`.
 

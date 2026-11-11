@@ -23,6 +23,16 @@ class ModelSettings:
 
 
 @dataclass
+class ModelCheckSettings:
+    # Thresholds for `dsar model-check`; `dsar classify` needs a passing check
+    # for the current model digest, prompt and settings.
+    min_accuracy: float = 0.8          # share of golden examples scored in their band
+    min_format_rate: float = 1.0       # share of responses that parse
+    min_chunks_per_minute: float = 2.0 # below this is a WARN (plan the run), not a FAIL
+    sample_size: int = 6               # chunks timed for the throughput estimate
+
+
+@dataclass
 class ChunkingSettings:
     max_chars: int
     overlap_chars: int
@@ -56,6 +66,7 @@ class Config:
     chunking: ChunkingSettings
     provenance: list[ProvenanceRule] = field(default_factory=list)
     classify_scope: ClassifyScope = field(default_factory=ClassifyScope)
+    model_check: ModelCheckSettings = field(default_factory=ModelCheckSettings)
 
 
 def load_config(path: str | Path = "config.yaml") -> Config:
@@ -66,4 +77,5 @@ def load_config(path: str | Path = "config.yaml") -> Config:
         chunking=ChunkingSettings(**raw["chunking"]),
         provenance=[ProvenanceRule(**r) for r in raw.get("provenance") or []],
         classify_scope=ClassifyScope(**(raw.get("classify_scope") or {})),
+        model_check=ModelCheckSettings(**(raw.get("model_check") or {})),
     )
