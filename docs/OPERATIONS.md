@@ -76,8 +76,9 @@ To withdraw individual classifications (for example failed evidence), use `dsar 
 ## 5. Known limitations (manual review needed)
 
 - Embedded emails inside PST attachments (attach method 5, `IPM.Note`): pypff gives headers only. Read the body in Outlook or with `readpst`.
-- Encrypted / sensitivity-labelled Office files, images, audio, video: catalogued, not read.
-- Attachments inside `.eml` files: listed by name, not extracted.
+- Encrypted / sensitivity-labelled Office files, OneNote, Loop, Whiteboard, scanned PDFs, images, audio, video: catalogued, not read. `dsar qa ingest` lists each one (*manual review*, *low-yield*).
+- Attachments inside saved `.eml`/`.msg` files are extracted by `dsar attachments` (nested to depth 3); unreadable ones are noted in `message_attachments_catalogue.csv`.
+- What each source gives: [COVERAGE.md](COVERAGE.md).
 - The alias prefilter only scores chunks that name the subject. Review documents the subject wrote as whole documents.
 - Recordings referenced in emails (call recorders, Teams) are often not in the export; ask for them.
 - `dsar report` writes every alias-matched chunk; on a big case that is over 1 GB. Reviewers use `results_scored.csv`.

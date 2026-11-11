@@ -5,7 +5,7 @@ Saved emails turn up both as SharePoint files and as PST attachments. Same
 content shape as the ``.msg`` chunker (header block + body, plain → html), so
 the classifier sees a familiar message. Attachments inside the .eml are listed
 by name in the chunk text so they are visible to the reviewer; their content is
-not extracted here.
+extracted by `dsar attachments` (dsar.message_attachments) and chunked as files.
 """
 from email import policy
 from email.parser import BytesParser

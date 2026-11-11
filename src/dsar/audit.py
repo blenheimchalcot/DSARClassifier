@@ -219,11 +219,13 @@ class Run:
     run_id: str
     data: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    # Kept apart from `data` so a command's own keys can never overwrite them.
+    hashes: dict[str, str] = field(default_factory=dict)
 
     def hash_file(self, label: str, path: str | Path) -> None:
         p = Path(path)
         if p.is_file():
-            self.data.setdefault("sha256", {})[label] = sha256_file(p)
+            self.hashes[label] = sha256_file(p)
 
     def warn(self, message: str) -> None:
         self.warnings.append(message)
@@ -254,6 +256,8 @@ def run(output_dir: Path, command: str, params: dict) -> Iterator[Run]:
         raise
     finally:
         end = {"status": status, "duration_s": round(time.monotonic() - t0, 1), **r.data}
+        if r.hashes:
+            end["sha256"] = r.hashes
         if r.warnings:
             end["warnings"] = r.warnings
         if error:
