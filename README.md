@@ -15,6 +15,7 @@ Local pipeline for GDPR / UK GDPR Data Subject Access Requests over Microsoft Pu
 - [docs/OPERATIONS.md](docs/OPERATIONS.md): operating rules and run-book. Read before any case.
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): building it on a new machine or server, including for another organisation.
 - [docs/MOVING_LAPTOP.md](docs/MOVING_LAPTOP.md): moving the operator's setup and live cases to another laptop.
+- [docs/REVIEWER_GUIDE.md](docs/REVIEWER_GUIDE.md): for HR and privacy reviewers deciding on items scored 7-10.
 
 ## Data handling rules
 
@@ -47,6 +48,8 @@ dsar verify-evidence        # 7. re-check every score 7+ quote; --supersede with
 dsar qa classify            # 7a. validate classifications; writes a reviewer sample workbook
 dsar qa import-sample <xlsx>  #   reviewer agreement with the model, once the workbook comes back
 dsar report                 # 8. output/results.csv (column evidence_in_source: yes / partial / no / missing)
+dsar review export          # 8a. reviewer workbook for scores 7-10 (docs/REVIEWER_GUIDE.md)
+dsar review import <xlsx>   # 8b. load reviewer decisions; `dsar review status` shows what's outstanding
 dsar audit verify           # 9. check the audit log; record the head hash outside the machine
 ```
 
