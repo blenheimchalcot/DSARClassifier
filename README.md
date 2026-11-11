@@ -71,6 +71,6 @@ caffeinate -d -i -s &       # stop macOS sleeping during long runs
 - The model can quote evidence that is not in the source (seen: the prompt's own score-10 example; an email address it made up). Never rely on a score 7+ row unless `evidence_in_source` is `yes`; check `partial`, `no` and `missing` by hand. The check catches invented quotes, not wrong judgement: a real quote can still carry too high a score.
 
 - Embedded emails inside PST attachments (attach method 5, `IPM.Note`): pypff exposes headers and subject, not the body. These are flagged in `pst_attachments_catalogue.csv` for manual review.
-- Attachments inside `.eml` files are listed by name, not extracted.
-- Encrypted / sensitivity-labelled Office files, images, audio and video are catalogued and listed as skipped. They need manual review.
+- Encrypted / sensitivity-labelled Office files, OneNote, Loop and Whiteboard files, scanned PDFs, images, audio and video are catalogued and listed by `dsar qa ingest`. They need manual review.
+- Full table of what is read and what isn't: [docs/COVERAGE.md](docs/COVERAGE.md).
 - The alias prefilter only scores chunks that name the subject. Review documents the subject wrote as whole files.

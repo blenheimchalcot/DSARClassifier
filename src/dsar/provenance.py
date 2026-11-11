@@ -19,7 +19,7 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Callable
 
-from dsar import db, pst_attachments
+from dsar import db, message_attachments, pst_attachments
 from dsar.config import ClassifyScope, ProvenanceRule
 
 
@@ -132,6 +132,13 @@ def build(
         for rel in (a.get("stored_rel_path"), a.get("recovered_text_rel_path")):
             if rel and parents:
                 by_rel.setdefault(rel, []).extend(parents)
+
+    # Attachments inside saved .eml/.msg files inherit the provenance of the
+    # exported file they were found in (resolved above, so this covers PST attachments too).
+    for a in message_attachments.load_catalogue(input_dir.parent / "output" / message_attachments.CATALOGUE_NAME):
+        rel, root = a.get("stored_rel_path"), a.get("root_rel")
+        if rel and by_rel.get(root):
+            by_rel.setdefault(rel, []).extend(by_rel[root])
 
     counters = {"files": 0, "manifest_match": 0, "manifest_mismatch": 0,
                 "not_in_manifest": 0, "purview_matched": 0, "labelled": 0}

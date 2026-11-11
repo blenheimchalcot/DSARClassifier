@@ -111,7 +111,12 @@ BINARY_NOISE_EXTS: dict[str, str] = {
     # Office/runtime aux files
     ".edge": "Microsoft Edge profile data",
     ".ods": "OpenDocument spreadsheet (not supported by current pipeline)",
-    ".one": "OneNote notebook (documented in methodology §8 as known gap)",
+    ".one": "OneNote notebook (not readable: export the section to PDF/.docx and review by hand)",
+    ".onetoc2": "OneNote table of contents (no content)",
+    # Microsoft 365 collaborative formats: content is not in the file in a readable form.
+    ".loop": "Loop component (not readable: open in Loop, export to PDF/.docx and review by hand)",
+    ".fluid": "Fluid/Loop component (not readable: open in Loop, export to PDF/.docx and review by hand)",
+    ".whiteboard": "Microsoft Whiteboard (not readable: export to PDF and review by hand)",
 }
 
 
@@ -809,22 +814,33 @@ def review_status_cmd(db_path: str | None) -> None:
               help="SHA-256 manifest to append stage-4 hashes to. Defaults to the newest output/pst_manifest_*.sha256.")
 @_audited("attachments")
 def attachments_cmd(manifest_path: str | None, run: audit.Run) -> None:
-    """Extract every PST attachment into input/PST_attachments/ and catalogue it against its parent email.
+    """Extract attachments from PSTs and saved emails (.eml/.msg) into input/PST_attachments/.
 
-    Run after the PSTs are hashed and before `dsar ingest`, which then chunks
-    the extracted files like any other input file.
+    Each attachment is catalogued against its parent. Run after the export is
+    hashed and before `dsar ingest`, which then chunks the extracted files like
+    any other input file. PSTs go first, so emails attached inside a PST have
+    their own attachments extracted in the second pass.
     """
+    from dsar import message_attachments
+
     data_dir = _data_dir()
     input_dir = data_dir / "input"
     pst_paths = sorted(p for p in input_dir.rglob("*.pst")
                        if pst_attachments.ATTACH_DIR not in p.relative_to(input_dir).parts)
-    if not pst_paths:
-        raise click.ClickException(f"No .pst files under {input_dir}")
-    rows = pst_attachments.extract(pst_paths, input_dir)
+    rows = pst_attachments.extract(pst_paths, input_dir) if pst_paths else []
     catalogue = data_dir / "output" / pst_attachments.CATALOGUE_NAME
-    pst_attachments.write_catalogue(rows, catalogue)
+    if pst_paths:
+        pst_attachments.write_catalogue(rows, catalogue)
 
-    stored = sorted({rel for r in rows for rel in (r.get("stored_rel_path"), r.get("recovered_text_rel_path")) if rel})
+    message_paths = message_attachments.find_messages(input_dir)
+    if not pst_paths and not message_paths:
+        raise click.ClickException(f"No .pst, .eml or .msg files under {input_dir}")
+    msg_rows = message_attachments.extract(message_paths, input_dir)
+    msg_catalogue = data_dir / "output" / message_attachments.CATALOGUE_NAME
+    message_attachments.write_catalogue(msg_rows, msg_catalogue)
+
+    stored = sorted({rel for r in rows for rel in (r.get("stored_rel_path"), r.get("recovered_text_rel_path")) if rel}
+                    | {r["stored_rel_path"] for r in msg_rows if r.get("stored_rel_path")})
     if manifest_path is None:
         manifest_path = _newest_manifest(data_dir)
     new: list[str] = []
@@ -835,7 +851,7 @@ def attachments_cmd(manifest_path: str | None, run: audit.Run) -> None:
         new = [rel for rel in stored if rel not in known]
         if new:
             with open(manifest_path, "a", encoding="utf-8") as f:
-                f.write(f"# Stage 4: PST attachments extracted by `dsar attachments`. Hashed {db._now()}\n")
+                f.write(f"# Stage 4: attachments extracted by `dsar attachments`. Hashed {db._now()}\n")
                 for rel in new:
                     f.write(f"{provenance.sha256_file(input_dir / rel)}  {rel}\n")
         click.echo(f"Manifest: {manifest_path} (+{len(new)} stage-4 entries)")
@@ -851,18 +867,28 @@ def attachments_cmd(manifest_path: str | None, run: audit.Run) -> None:
     click.echo(f"  unreadable:           {sum(1 for r in rows if (r.get('note') or '').startswith('unreadable'))}")
     click.echo(f"  needs manual review:  {sum(1 for r in rows if (r.get('note') or '').startswith('embedded email'))}"
                " (embedded emails: body not recoverable via pypff)")
+    msg_unreadable = sum(1 for r in msg_rows if "unreadable" in (r.get("note") or "")
+                         or (r.get("note") or "").startswith("unsupported"))
+    click.echo(f"  saved emails (.eml/.msg): {len(message_paths)}, attachments: "
+               f"{sum(1 for r in msg_rows if r.get('stored_rel_path'))} extracted, {msg_unreadable} unreadable")
     click.echo(f"  files written:        {len(stored)} (incl. recovered-text files)")
-    click.echo(f"Catalogue: {catalogue}")
-    unreadable = sum(1 for r in rows if (r.get("note") or "").startswith("unreadable"))
+    if pst_paths:
+        click.echo(f"Catalogue: {catalogue}")
+    click.echo(f"Catalogue: {msg_catalogue}")
+    unreadable = sum(1 for r in rows if (r.get("note") or "").startswith("unreadable")) + msg_unreadable
     manual = sum(1 for r in rows if (r.get("note") or "").startswith("embedded email"))
     run.data.update(psts=len(pst_paths), attachment_instances=len(rows), by_method=by_method,
+                    saved_emails=len(message_paths),
+                    saved_email_attachments=sum(1 for r in msg_rows if r.get("stored_rel_path")),
                     files_written=len(stored), unreadable=unreadable, needs_manual_review=manual,
                     manifest=manifest_path or "(none)", manifest_entries_added=len(new))
+    run.hash_file(message_attachments.CATALOGUE_NAME, msg_catalogue)
     if not manifest_path:
         run.warn("no manifest found: stage-4 hashes not recorded (run `dsar manifest` first)")
     if unreadable:
         run.warn(f"{unreadable} attachment(s) unreadable")
-    run.hash_file(pst_attachments.CATALOGUE_NAME, catalogue)
+    if pst_paths:
+        run.hash_file(pst_attachments.CATALOGUE_NAME, catalogue)
     if manifest_path:
         run.hash_file(Path(manifest_path).name, manifest_path)
 

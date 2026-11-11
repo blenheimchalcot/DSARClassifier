@@ -40,6 +40,8 @@ LOW_YIELD_MIN_CHARS = 200
 OVERSIZE_TOLERANCE = 1.05
 
 ERROR_PREFIXES = ("error:", "pst ingest error:")
+# Skip reasons for formats that may hold personal data but can't be read (Loop, OneNote...).
+MANUAL_REVIEW_MARK = "review by hand"
 FINDINGS_LIMIT_PER_CHECK = 5000
 
 
@@ -99,6 +101,8 @@ def ingest_qa(conn: sqlite3.Connection, input_dir: Path, max_chars: int,
         elif reasons:
             states["skipped"] += 1
             for r in reasons:
+                if MANUAL_REVIEW_MARK in r:
+                    add("manual review", WARN, sp, r)
                 skip_reasons[r.split(":", 1)[0] if r.startswith("skipped:") else r] += 1
         elif any(sp.startswith(root.rstrip("/") + "/") for root in skipped_roots):
             states["skipped (excluded folder)"] += 1
