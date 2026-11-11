@@ -2,6 +2,8 @@
 
 What moves by itself, what doesn't, and how to bring each part across.
 
+The platform's source of truth is GitHub; the OneDrive folder is only the operator's synced working copy of it. On any new machine you can equally `git clone` from GitHub. Case data always stays on a local disk.
+
 | Part | Where it lives | How it gets to the new laptop |
 |---|---|---|
 | Code, docs, templates | OneDrive folder + GitHub | OneDrive syncs it. Re-attach git (step 2). |

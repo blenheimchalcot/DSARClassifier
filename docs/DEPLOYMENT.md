@@ -2,6 +2,8 @@
 
 Use this to build the pipeline for a different organisation (a new controller) or on a new server. Read [OPERATIONS.md](OPERATIONS.md) before running a case.
 
+The model is always the same: **the process runs on the local machine, the Purview export sits on that machine's local hard drive, and the platform is drawn down from GitHub** (see the README's design principle). A server here means a machine the operator works on directly, holding its own data.
+
 ## 0. Before you start: separation between organisations
 
 - **Bring code only.** Nothing from another organisation's cases (databases, results, configs, prompts, audit logs, memory notes) goes onto the new machine. Everything case-specific is gitignored, so a clean clone is clean.

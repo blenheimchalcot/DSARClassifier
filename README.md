@@ -2,7 +2,13 @@
 
 Local pipeline for GDPR / UK GDPR Data Subject Access Requests over Microsoft Purview eDiscovery exports. It ingests PSTs, PST attachments and SharePoint/OneDrive/Teams files, finds the content that mentions the data subject, scores each piece 0–10 with a local LLM (Ollama), and produces a reviewer spreadsheet with full provenance.
 
-Everything runs on the operator's machine. No subject data leaves it.
+## Design principle
+
+**The process runs on a local machine. The Purview export and every dataset derived from it stay on that machine's local hard drive. The DSARClassifier platform itself is drawn down from GitHub.**
+
+- **Local processing:** ingest, classification (a local LLM through Ollama) and reporting all run on the machine holding the data. No cloud services, no external APIs, no data leaves the machine.
+- **Local data:** the Purview export, the case database, results and audit log live on the local disk, outside any cloud-synced folder, one directory per case.
+- **Code from GitHub:** each machine clones this repository. GitHub holds code, templates and documentation only, never case data or subject details.
 
 ## Documentation
 
