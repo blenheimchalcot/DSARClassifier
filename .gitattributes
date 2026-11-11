@@ -1,0 +1,3 @@
+# Operator-internal files: kept in the repo, left out of release zips (git archive).
+docs/MOVING_LAPTOP.md export-ignore
+scripts/attach_git.sh export-ignore
