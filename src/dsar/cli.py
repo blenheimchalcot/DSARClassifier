@@ -1,13 +1,15 @@
 import asyncio
+import functools
 import gc
 import os
 import time
+from datetime import date
 from pathlib import Path
 
 import click
 from dotenv import load_dotenv
 
-from dsar import db, provenance, pst_attachments, report
+from dsar import audit, db, provenance, pst_attachments, report
 from dsar.chunking import (
     csv_table,
     documents,
@@ -22,7 +24,7 @@ from dsar.chunking import (
     teams_chat,
 )
 from dsar.chunking.prefilter import build_matcher
-from dsar.classify import classify_all, load_system_prompt
+from dsar.classify import classify_all, load_system_prompt, ollama_info
 from dsar.config import load_config
 
 
@@ -131,6 +133,33 @@ def _is_excluded_path(path: Path) -> str | None:
     return None
 
 
+# Errors listed individually in an audit entry; the rest are counted.
+AUDIT_ERROR_LIMIT = 50
+
+
+def _audited(command: str):
+    """Write start/end entries to the case audit log around a command (see dsar.audit).
+
+    The wrapped command receives the audit `run` to add counts, hashes and warnings.
+    """
+    def deco(fn):
+        @functools.wraps(fn)
+        def wrapper(**kwargs):
+            params = {k: str(v) if isinstance(v, Path) else v for k, v in kwargs.items()}
+            with audit.run(_data_dir() / "output", command, params) as run:
+                for key, label in (("config_path", "config"), ("system_prompt", "system_prompt")):
+                    if kwargs.get(key):
+                        run.hash_file(label, kwargs[key])
+                return fn(run=run, **kwargs)
+        return wrapper
+    return deco
+
+
+def _newest_manifest(data_dir: Path) -> str | None:
+    manifests = sorted((data_dir / "output").glob("pst_manifest_*.sha256"))
+    return str(manifests[-1]) if manifests else None
+
+
 @click.group()
 def main() -> None:
     """DSAR classification pipeline."""
@@ -141,7 +170,8 @@ def main() -> None:
 @click.argument("input_dir", type=click.Path(exists=True, file_okay=False, path_type=Path), required=False)
 @click.option("--db-path", default=None, help="SQLite path. Defaults to $DSAR_DATA_DIR/dsar.sqlite.")
 @click.option("--config", "config_path", default=DEFAULT_CONFIG, show_default=True)
-def ingest(input_dir: Path | None, db_path: str | None, config_path: str) -> None:
+@_audited("ingest")
+def ingest(input_dir: Path | None, db_path: str | None, config_path: str, run: audit.Run) -> None:
     """Walk INPUT_DIR (default: $DSAR_DATA_DIR/input), chunk every supported file, write to SQLite."""
     data_dir = _data_dir()
     if input_dir is None:
@@ -161,6 +191,7 @@ def ingest(input_dir: Path | None, db_path: str | None, config_path: str) -> Non
         "alias_matched": 0, "duplicates_skipped": 0,
     }
 
+    errors: list[str] = []
     pst_paths: list[Path] = []
     other_paths: list[Path] = []
     excluded_roots_seen: set[tuple[str, str]] = set()
@@ -255,6 +286,7 @@ def ingest(input_dir: Path | None, db_path: str | None, config_path: str) -> Non
             except Exception as exc:
                 db.record_skipped(conn, ",".join(str(p) for p in pst_paths), f"pst ingest error: {exc}")
                 counters["skipped_files"] += len(pst_paths)
+                errors.append(f"PST ingest: {exc}")
                 click.echo(f"  ! error during PST ingest: {exc}", err=True)
             conn.commit()
             written_since_commit = 0
@@ -262,7 +294,9 @@ def ingest(input_dir: Path | None, db_path: str | None, config_path: str) -> Non
         # Then everything else, one file at a time.
         total_other = len(other_paths)
         t_started = time.time()
+        progress = audit.Progress(data_dir / "output", "ingest", total_other)
         for file_idx, path in enumerate(other_paths, start=1):
+            progress.update(file_idx - 1, str(path))
             ext = path.suffix.lower()
             parts = set(path.parts)
             # Per-file progress so a long run is observable and a hang/OOM
@@ -336,15 +370,23 @@ def ingest(input_dir: Path | None, db_path: str | None, config_path: str) -> Non
             except Exception as exc:
                 db.record_skipped(conn, str(path), f"error: {exc}")
                 counters["skipped_files"] += 1
+                errors.append(f"{path}: {exc}")
                 click.echo(f"  ! error on {path}: {exc}", err=True)
             # Commit at file boundaries too — so a per-file failure later in the
             # batch can't roll back already-completed files.
             conn.commit()
             written_since_commit = 0
+        progress.update(total_other)
 
     click.echo("Ingest complete:")
     for k, v in counters.items():
         click.echo(f"  {k}: {v}")
+    run.data.update(input_dir=str(input_dir), db=db_path, counts=counters,
+                    pst_files=len(pst_paths), other_files=total_other, errors_total=len(errors))
+    if errors:
+        run.data["errors"] = errors[:AUDIT_ERROR_LIMIT]
+        run.warn(f"{len(errors)} file(s) failed to ingest; see the skipped table")
+    run.hash_file("dsar.sqlite", db_path)
 
 
 @main.command()
@@ -354,8 +396,9 @@ def ingest(input_dir: Path | None, db_path: str | None, config_path: str) -> Non
 @click.option("--model", default=None, help="Override model from config.yaml.")
 @click.option("--limit", type=int, default=None, help="Classify at most N chunks (for dry-runs).")
 @click.option("--plan", is_flag=True, help="Print in-scope / out-of-scope counts per provenance label and exit.")
+@_audited("classify")
 def classify(db_path: str | None, config_path: str, system_prompt: str, model: str | None,
-             limit: int | None, plan: bool) -> None:
+             limit: int | None, plan: bool, run: audit.Run) -> None:
     """Classify every alias-matched, in-scope chunk that hasn't been classified yet."""
     data_dir = _data_dir()
     if db_path is None:
@@ -389,9 +432,16 @@ def classify(db_path: str | None, config_path: str, system_prompt: str, model: s
                 click.echo(f"{i:>9} {o:>9} {d:>7}  {label}")
             click.echo(f"{sum(t[0] for t in tally.values()):>9} {sum(t[1] for t in tally.values()):>9} "
                        f"{sum(t[2] for t in tally.values()):>7}  TOTAL")
+            run.data["plan"] = {label: {"in_scope": i, "out_of_scope": o, "done": d}
+                                for label, (i, o, d) in tally.items()}
             return
+        pending = len(db.unclassified_chunk_ids(conn, limit=limit, in_scope=in_scope))
     scope_desc = "all alias-matched chunks" if cfg.classify_scope.is_unrestricted else str(cfg.classify_scope)
     click.echo(f"Scope: {scope_desc}")
+    run.data.update(scope=scope_desc, pending_at_start=pending, ollama=ollama_info(chosen_model),
+                    settings={"max_tokens": cfg.model.max_tokens, "temperature": cfg.model.temperature,
+                              "concurrency": cfg.model.concurrency})
+    progress = audit.Progress(data_dir / "output", "classify", pending)
 
     def _progress(chunk_id: str, parsed, totals) -> None:
         label = parsed.special_return or f"score={parsed.score}"
@@ -399,6 +449,7 @@ def classify(db_path: str | None, config_path: str, system_prompt: str, model: s
             f"  [{totals.requests}] {chunk_id} -> {label} "
             f"(in={totals.input_tokens} out={totals.output_tokens})"
         )
+        progress.update(totals.requests + totals.failed, chunk_id)
 
     with db.connect(db_path) as conn:
         db.init_schema(conn)
@@ -415,16 +466,26 @@ def classify(db_path: str | None, config_path: str, system_prompt: str, model: s
             in_scope=in_scope,
         ))
 
+    progress.update(pending)
     click.echo("Classification complete:")
     click.echo(f"  requests:      {totals.requests}")
     click.echo(f"  input_tokens:  {totals.input_tokens}")
     click.echo(f"  output_tokens: {totals.output_tokens}")
+    click.echo(f"  evidence retries: {totals.evidence_retries}")
+    click.echo(f"  failed:        {totals.failed} (left unclassified; re-run to retry)")
+    run.data.update(classified=totals.requests, failed=totals.failed, evidence_retries=totals.evidence_retries,
+                    input_tokens=totals.input_tokens, output_tokens=totals.output_tokens)
+    if totals.failed:
+        run.data["failed_chunk_ids"] = totals.failed_chunk_ids[:AUDIT_ERROR_LIMIT]
+        run.warn(f"{totals.failed} chunk(s) failed and stay unclassified")
+    run.hash_file("dsar.sqlite", db_path)
 
 
 @main.command(name="attachments")
 @click.option("--manifest", "manifest_path", default=None,
               help="SHA-256 manifest to append stage-4 hashes to. Defaults to the newest output/pst_manifest_*.sha256.")
-def attachments_cmd(manifest_path: str | None) -> None:
+@_audited("attachments")
+def attachments_cmd(manifest_path: str | None, run: audit.Run) -> None:
     """Extract every PST attachment into input/PST_attachments/ and catalogue it against its parent email.
 
     Run after the PSTs are hashed and before `dsar ingest`, which then chunks
@@ -442,8 +503,8 @@ def attachments_cmd(manifest_path: str | None) -> None:
 
     stored = sorted({rel for r in rows for rel in (r.get("stored_rel_path"), r.get("recovered_text_rel_path")) if rel})
     if manifest_path is None:
-        manifests = sorted((data_dir / "output").glob("pst_manifest_*.sha256"))
-        manifest_path = str(manifests[-1]) if manifests else None
+        manifest_path = _newest_manifest(data_dir)
+    new: list[str] = []
     if manifest_path:
         # Append-only: stage 4 lists the extracted files so `dsar provenance`
         # can verify them like every other input file.
@@ -469,6 +530,18 @@ def attachments_cmd(manifest_path: str | None) -> None:
                " (embedded emails: body not recoverable via pypff)")
     click.echo(f"  files written:        {len(stored)} (incl. recovered-text files)")
     click.echo(f"Catalogue: {catalogue}")
+    unreadable = sum(1 for r in rows if (r.get("note") or "").startswith("unreadable"))
+    manual = sum(1 for r in rows if (r.get("note") or "").startswith("embedded email"))
+    run.data.update(psts=len(pst_paths), attachment_instances=len(rows), by_method=by_method,
+                    files_written=len(stored), unreadable=unreadable, needs_manual_review=manual,
+                    manifest=manifest_path or "(none)", manifest_entries_added=len(new))
+    if not manifest_path:
+        run.warn("no manifest found: stage-4 hashes not recorded (run `dsar manifest` first)")
+    if unreadable:
+        run.warn(f"{unreadable} attachment(s) unreadable")
+    run.hash_file(pst_attachments.CATALOGUE_NAME, catalogue)
+    if manifest_path:
+        run.hash_file(Path(manifest_path).name, manifest_path)
 
 
 @main.command(name="provenance")
@@ -478,15 +551,16 @@ def attachments_cmd(manifest_path: str | None) -> None:
               help="SHA-256 manifest to verify against. Defaults to the newest output/pst_manifest_*.sha256.")
 @click.option("--out", "out_path", default=None,
               help="Catalogue CSV path. Defaults to $DSAR_DATA_DIR/output/provenance_catalogue.csv.")
-def provenance_cmd(db_path: str | None, config_path: str, manifest_path: str | None, out_path: str | None) -> None:
+@_audited("provenance")
+def provenance_cmd(db_path: str | None, config_path: str, manifest_path: str | None, out_path: str | None,
+                   run: audit.Run) -> None:
     """Catalogue where every input file came from (hash, Purview custodian/location, provenance label)."""
     data_dir = _data_dir()
     input_dir = data_dir / "input"
     if db_path is None:
         db_path = str(data_dir / "dsar.sqlite")
     if manifest_path is None:
-        manifests = sorted((data_dir / "output").glob("pst_manifest_*.sha256"))
-        manifest_path = str(manifests[-1]) if manifests else None
+        manifest_path = _newest_manifest(data_dir)
     if out_path is None:
         out_path = str(data_dir / "output" / "provenance_catalogue.csv")
     cfg = load_config(config_path)
@@ -503,6 +577,13 @@ def provenance_cmd(db_path: str | None, config_path: str, manifest_path: str | N
     for k, v in counters.items():
         click.echo(f"  {k}: {v}")
     click.echo(f"Wrote {n} rows to {out_path}")
+    run.data.update(manifest=manifest_path or "(none)", counts=counters, catalogue_rows=n)
+    run.hash_file("provenance_catalogue.csv", out_path)
+    run.hash_file("dsar.sqlite", db_path)
+    if not manifest_path:
+        run.warn("no manifest: files could not be verified against pre-ingest hashes")
+    if counters["not_in_manifest"] and manifest_path:
+        run.warn(f"{counters['not_in_manifest']} file(s) not in the manifest")
     if counters["manifest_mismatch"]:
         raise click.ClickException(f"{counters['manifest_mismatch']} file(s) do not match the manifest")
 
@@ -512,7 +593,8 @@ def provenance_cmd(db_path: str | None, config_path: str, manifest_path: str | N
 @click.option("--supersede", is_flag=True,
               help="Move classifications whose evidence is not in the source to superseded_classifications, "
                    "so the next `dsar classify` re-scores them.")
-def verify_evidence_cmd(db_path: str | None, supersede: bool) -> None:
+@_audited("verify-evidence")
+def verify_evidence_cmd(db_path: str | None, supersede: bool, run: audit.Run) -> None:
     """Check every score 7+ evidence quote against its chunk's text."""
     from collections import Counter
     from dsar import evidence
@@ -535,6 +617,11 @@ def verify_evidence_cmd(db_path: str | None, supersede: bool) -> None:
         click.echo(f"Score {evidence.EVIDENCE_REQUIRED_FROM}+ classifications: {len(rows)} -> {dict(counts)}")
         for cid, score, v in failed:
             click.echo(f"  {v:8} score {score:>2}  {cid}")
+        run.data.update(checked=len(rows), results=dict(counts), failed=len(failed),
+                        superseded=len(failed) if supersede else 0)
+        if failed:
+            run.data["failed_chunk_ids"] = [cid for cid, _, _ in failed][:AUDIT_ERROR_LIMIT]
+            run.warn(f"{len(failed)} score {evidence.EVIDENCE_REQUIRED_FROM}+ quote(s) not found in the source")
         if supersede and failed:
             now = db._now()
             for cid, _, v in failed:
@@ -545,12 +632,15 @@ def verify_evidence_cmd(db_path: str | None, supersede: bool) -> None:
                 conn.execute("DELETE FROM classifications WHERE chunk_id = ?", (cid,))
             conn.commit()
             click.echo(f"Superseded {len(failed)}; run `dsar classify` to re-score them.")
+    if supersede and failed:
+        run.hash_file("dsar.sqlite", db_path)
 
 
 @main.command(name="report")
 @click.option("--db-path", default=None, help="SQLite path. Defaults to $DSAR_DATA_DIR/dsar.sqlite.")
 @click.option("--out", "out_path", default=None, help="CSV output path. Defaults to $DSAR_DATA_DIR/output/results.csv.")
-def report_cmd(db_path: str | None, out_path: str | None) -> None:
+@_audited("report")
+def report_cmd(db_path: str | None, out_path: str | None, run: audit.Run) -> None:
     """Export a reviewer-friendly CSV of alias-matched chunks sorted by score desc."""
     data_dir = _data_dir()
     if db_path is None:
@@ -563,6 +653,117 @@ def report_cmd(db_path: str | None, out_path: str | None) -> None:
         db.init_schema(conn)
         n = report.export_csv(conn, out_path)
     click.echo(f"Wrote {n} rows to {out_path}")
+    run.data.update(rows=n, out=out_path)
+    run.hash_file(Path(out_path).name, out_path)
+    run.hash_file("dsar.sqlite", db_path)
+
+
+@main.command(name="manifest")
+@click.option("--stage", default=None,
+              help="Label for this hashing pass, e.g. 'Purview ZIPs before extraction'.")
+@click.option("--new", "force_new", is_flag=True, help="Start a new manifest instead of appending to the newest.")
+@_audited("manifest")
+def manifest_cmd(stage: str | None, force_new: bool, run: audit.Run) -> None:
+    """Hash every file under input/ into output/pst_manifest_<date>.sha256 (append-only).
+
+    Run once on the Purview ZIPs before extracting them, and again after
+    extraction: each pass appends only files not already listed. Files whose
+    bytes changed since they were listed are reported, never re-hashed over.
+    """
+    data_dir = _data_dir()
+    input_dir = data_dir / "input"
+    if not input_dir.is_dir():
+        raise click.ClickException(f"Input dir not found: {input_dir}")
+    manifest_path = None if force_new else _newest_manifest(data_dir)
+    if manifest_path is None:
+        manifest_path = str(data_dir / "output" / f"pst_manifest_{date.today().isoformat()}.sha256")
+        if Path(manifest_path).exists():
+            raise click.ClickException(f"{manifest_path} already exists; never overwritten")
+    known = provenance.load_manifest(Path(manifest_path)) if Path(manifest_path).exists() else {}
+
+    files = sorted(p for p in input_dir.rglob("*")
+                   if p.is_file() and p.name != ".DS_Store"
+                   and pst_attachments.ATTACH_DIR not in p.relative_to(input_dir).parts)
+    added: list[tuple[str, str]] = []
+    changed: list[str] = []
+    progress = audit.Progress(data_dir / "output", "manifest", len(files))
+    for i, path in enumerate(files):
+        progress.update(i, str(path))
+        rel = path.relative_to(input_dir).as_posix()
+        digest = provenance.sha256_file(path)
+        if rel not in known:
+            added.append((digest, rel))
+        elif known[rel] != digest:
+            changed.append(rel)
+    progress.update(len(files))
+
+    Path(manifest_path).parent.mkdir(parents=True, exist_ok=True)
+    if added:
+        with open(manifest_path, "a", encoding="utf-8") as f:
+            f.write(f"# {stage or 'Input files'}: hashed by `dsar manifest` {db._now()}\n")
+            for digest, rel in added:
+                f.write(f"{digest}  {rel}\n")
+    click.echo(f"Manifest: {manifest_path}")
+    click.echo(f"  files under input/: {len(files)}")
+    click.echo(f"  added:              {len(added)}")
+    click.echo(f"  already listed:     {len(files) - len(added) - len(changed)}")
+    run.data.update(manifest=manifest_path, stage=stage or "Input files", files=len(files),
+                    added=len(added), changed=len(changed))
+    run.hash_file(Path(manifest_path).name, manifest_path)
+    if changed:
+        run.data["changed_files"] = changed[:AUDIT_ERROR_LIMIT]
+        raise click.ClickException(f"{len(changed)} listed file(s) no longer match their manifest hash: "
+                                   + ", ".join(changed[:5]))
+
+
+@main.group(name="audit")
+def audit_group() -> None:
+    """Read, verify and annotate the case audit log (output/AUDIT_LOG.*)."""
+
+
+@audit_group.command(name="verify")
+def audit_verify() -> None:
+    """Check the audit log's hash chain and its Markdown cross-references."""
+    log = audit.AuditLog(_data_dir() / "output")
+    n, head, problems = log.verify()
+    click.echo(f"{log.jsonl}: {n} entries, head sha256 {head}")
+    log.append("verify", "audit verify", {"entries": n, "head_sha256": head,
+                                          "status": "ok" if not problems else "failed",
+                                          "problems": problems[:AUDIT_ERROR_LIMIT]})
+    if problems:
+        for p in problems:
+            click.echo(f"  ! {p}", err=True)
+        raise click.ClickException(f"audit log failed verification ({len(problems)} problem(s))")
+    click.echo("Chain intact. Record the head hash outside this machine to pin the log as of now.")
+
+
+@audit_group.command(name="show")
+@click.option("--last", type=int, default=20, show_default=True, help="Show the last N command runs.")
+def audit_show(last: int) -> None:
+    """Summarise recent runs: command, status, duration, warnings."""
+    entries = audit.AuditLog(_data_dir() / "output").entries()
+    ends = [e for e in entries if e["event"] == "end"]
+    click.echo(f"{len(entries)} entries, {len(ends)} completed runs")
+    for e in ends[-last:]:
+        d = e["data"]
+        warn = f"  ({len(d['warnings'])} warning(s))" if d.get("warnings") else ""
+        click.echo(f"  {e['ts']}  {e['command']:<16} {d.get('status', '?'):<11} {d.get('duration_s', '?')}s"
+                   f"  {e['actor']}{warn}")
+        if d.get("error"):
+            click.echo(f"      error: {d['error']}")
+    started = {e["run_id"] for e in entries if e["event"] == "start"}
+    unfinished = started - {e["run_id"] for e in ends}
+    if unfinished:
+        click.echo(f"  {len(unfinished)} run(s) with no end entry (still running, or killed): "
+                   + ", ".join(sorted(unfinished)))
+
+
+@audit_group.command(name="note")
+@click.argument("text")
+def audit_note(text: str) -> None:
+    """Append an operator note (decisions, manual checks, hand-offs) to the audit log."""
+    entry = audit.AuditLog(_data_dir() / "output").append("note", "audit note", {"text": text})
+    click.echo(f"Logged entry #{entry['seq']}")
 
 
 if __name__ == "__main__":

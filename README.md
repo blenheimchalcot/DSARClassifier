@@ -20,7 +20,7 @@ Local pipeline for GDPR / UK GDPR Data Subject Access Requests over Microsoft Pu
 
 - Case data lives **outside** any cloud-synced folder, one directory per case: `<root>/<CASE-REF>/data/{input,output}`. Point `DSAR_DATA_DIR` in `.env` at it.
 - `config.yaml` and `claude_strict.md` hold the data subject's details and are **gitignored**. Copy the `*.example.*` templates for each case.
-- Every case keeps an append-only `output/AUDIT_LOG.md` (UTC times, actor, hashes).
+- Every case keeps an append-only audit log, written automatically by every `dsar` command: `output/AUDIT_LOG.md` (human-readable) and `output/AUDIT_LOG.jsonl` (hash-chained; `dsar audit verify`). Long runs keep `output/progress.json` current.
 - Nothing is deleted. Superseded databases are moved to `output/archive_pre-reingest_<date>/` with hashes re-verified after the move.
 
 ## Run order (per case)
@@ -32,9 +32,10 @@ cp claude_strict.example.md claude_strict.md
 cp CLAUDE.example.md CLAUDE.md               # optional: instructions for Claude Code
 pip install -r requirements.lock && pip install -e . --no-deps
 
-# 1. Put the unextracted Purview ZIPs in input/, hash them, extract to
-#    input/PSTs, input/Files, input/metadata, then hash the extracted files
-#    (output/pst_manifest_<date>.sha256).
+# 1. Put the unextracted Purview ZIPs in input/ and hash them, then extract to
+#    input/PSTs, input/Files, input/metadata and hash the extracted files:
+dsar manifest --stage "Purview ZIPs before extraction"
+dsar manifest --stage "Extracted export"   # appends to output/pst_manifest_<date>.sha256
 dsar attachments            # 2. extract + catalogue every PST attachment (appends stage-4 hashes)
 dsar ingest                 # 3. chunk everything into dsar.sqlite
 dsar provenance             # 4. verify against the manifest, link to Purview custodian/location
@@ -42,7 +43,10 @@ dsar classify --plan        # 5. check scope
 dsar classify               # 6. score with the local model (score 7+ evidence is checked; one retry if not in source)
 dsar verify-evidence        # 7. re-check every score 7+ quote; --supersede withdraws failures for re-scoring
 dsar report                 # 8. output/results.csv (column evidence_in_source: yes / partial / no / missing)
+dsar audit verify           # 9. check the audit log; record the head hash outside the machine
 ```
+
+`dsar audit show` lists recent runs and their status; `dsar audit note "..."` records an operator decision.
 
 Use `--config <path>` to run a case with its own config file.
 
