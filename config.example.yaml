@@ -25,6 +25,8 @@ model:
   max_tokens: 300
   temperature: 0.0
   concurrency: 2
+  # Validated model digest (`ollama list`). `dsar doctor` fails on any other build.
+  expected_digest: "c6eb396dbd59"
 
 # Provenance labels (per case). Descriptive only — nothing is excluded.
 # `match` is a glob relative to $DSAR_DATA_DIR/input; first match wins.
