@@ -11,7 +11,7 @@ These rules come from running real cases. Each one exists because something went
 | **Hash before you touch.** SHA-256 manifest of the Purview ZIPs and every extracted file before ingest (`dsar manifest` → `output/pst_manifest_<date>.sha256`). | Proves the bytes classified are the bytes Purview exported. |
 | **Never delete.** Superseded DBs and outputs are moved (`mv`) to `output/archive_pre-reingest_<date>/runN_<reason>/` and re-hashed after the move. Processed PSTs go to `output/processed_pst_<date>_DELETABLE/`; only the operator deletes. | Chain of custody. |
 | **Append-only audit log** from case open. Every `dsar` command writes start/end entries itself (UTC time, actor, code commit, config/prompt hashes, counts, output hashes, warnings, errors, retries) to `output/AUDIT_LOG.md` and the hash-chained `output/AUDIT_LOG.jsonl`. Record decisions and manual steps with `dsar audit note`. Set `DSAR_OPERATOR` in `.env`. Correct by a new entry, never by editing an old one; `dsar audit verify` detects edits. | The case must be demonstrable. |
-| **Never silently drop content.** Persist email bodies verbatim (no signature or quoted-history stripping). After ingest, spot-check large files that produced few chunks. | A missing paragraph can be the only copy of something the subject is entitled to. |
+| **Never silently drop content.** Persist email bodies verbatim (no signature or quoted-history stripping). After ingest, `dsar qa ingest` must pass; read every low-yield file it lists by hand. | A missing paragraph can be the only copy of something the subject is entitled to. |
 | **Never trust model output.** Every score 7+ quote must be found in the source (`evidence_in_source`). The check catches invented quotes, not bad judgement, so sanity-check high scores too. | The model has quoted its own prompt example, and invented an email address. |
 | **Exclude, don't delete.** Other DSARs' work product found in an export (results files, reports, prompts naming the subject) is labelled with `provenance:` rules and kept out of scope with `classify_scope`, with the decision logged. Ask the operator; don't assume. | Prior case output can be most of the hits. |
 
@@ -27,6 +27,7 @@ dsar attachments --config <case config>   # 2. PST attachments out + catalogued 
 dsar ingest      --config <case config>   # 3. chunk into dsar.sqlite
 dsar provenance  --config <case config>   # 4. verify against manifest; custodian/location per file
 #    -> review other-DSAR material with the operator, set provenance labels + classify_scope
+dsar qa ingest   --config <case config>   # 4a. every file accounted for, reconciled with Purview; review WARNs
 dsar classify --plan --config <case config>   # 5. check scope and chunk counts
 dsar model-check     --config <case config>   # 5a. model accuracy, context window, speed + run-time estimate
 dsar classify        --config <case config>   # 6. score (evidence checked, one retry)
@@ -38,9 +39,9 @@ dsar audit verify                             # 9. chain intact; note the head h
 
 Progress of a long `ingest`, `manifest` or `classify` is in `output/progress.json` (done, total, rate, ETA). `dsar audit show` lists runs with no end entry, which means the run is still going or was killed.
 
-Before step 6, check `max(length(content))` for in-scope chunks; anything far over `chunking.max_chars` gets truncated by Ollama and the model summarises instead of scoring.
+`dsar qa ingest` (step 4a) replaces the manual post-ingest checks. It fails if any file under `input/` has no chunks and no skip record, if a reader errored, if an item in Purview's report is missing from disk, or if an in-scope chunk is over `chunking.max_chars` (Ollama would truncate it). It warns on items Purview itself failed to export, PST emails in Purview's report not found by Message-ID (sent items and drafts can lack the header, so check before acting), and documents that gave almost no text for their size (scanned or protected: read them by hand). Findings are in `output/qa_ingest_<time>.csv`; log what you decided about each WARN with `dsar audit note`.
 
-`dsar classify` refuses to start without a passing `dsar model-check` for the current model digest, system prompt, `max_tokens` and `temperature`, so editing the prompt or updating the model means a new check. The check scores synthetic examples across the scale (the subject's name substituted in), sends a full-size chunk with a sensitive sentence first and then last to catch truncation, checks format and repeatability, and times pending case chunks to estimate the run. It writes `output/model_check_<time>.json` and never writes to the case database. `--skip-checks "<reason>"` overrides the gate; the reason is audit-logged.
+`dsar classify` refuses to start without a passing `dsar qa ingest` for the current database, and a passing `dsar model-check` for the current model digest, system prompt, `max_tokens` and `temperature`, so editing the prompt or updating the model means a new check. The check scores synthetic examples across the scale (the subject's name substituted in), sends a full-size chunk with a sensitive sentence first and then last to catch truncation, checks format and repeatability, and times pending case chunks to estimate the run. It writes `output/model_check_<time>.json` and never writes to the case database. `--skip-checks "<reason>"` overrides the gate; the reason is audit-logged.
 
 The commands hash `dsar.sqlite` and their outputs into the audit log. Hash any SQL script you run by hand, and log it with `dsar audit note`.
 

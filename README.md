@@ -39,6 +39,7 @@ dsar manifest --stage "Extracted export"   # appends to output/pst_manifest_<dat
 dsar attachments            # 2. extract + catalogue every PST attachment (appends stage-4 hashes)
 dsar ingest                 # 3. chunk everything into dsar.sqlite
 dsar provenance             # 4. verify against the manifest, link to Purview custodian/location
+dsar qa ingest              # 4a. every file accounted for, reconciled with Purview's item report
 dsar classify --plan        # 5. check scope
 dsar model-check            # 5a. test the model (accuracy, context window, speed); classify needs a pass
 dsar classify               # 6. score with the local model (score 7+ evidence is checked; one retry if not in source)
