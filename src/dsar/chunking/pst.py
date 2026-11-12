@@ -30,6 +30,14 @@ _HEADER_FROM = re.compile(r"^From:\s*(.+)$", re.MULTILINE | re.IGNORECASE)
 # records the custodian mailbox and folder each exported email came from.
 _HEADER_MESSAGE_ID = re.compile(r"^Message-ID:\s*(<[^>\r\n]+>)", re.MULTILINE | re.IGNORECASE)
 
+# MAPI display-recipient properties. Sent items and drafts carry no transport
+# headers, so without these the recipients of a third of a mailbox are invisible
+# to the alias matcher (an email to the subject that only says "Hi <first name>"
+# was never matched).
+_PR_DISPLAY_BCC = 0x0E02
+_PR_DISPLAY_CC = 0x0E03
+_PR_DISPLAY_TO = 0x0E04
+
 
 @dataclass
 class RawMessage:
@@ -42,6 +50,7 @@ class RawMessage:
     sent_iso: str | None                # ISO 8601; None if unknown
     to: str | None = None
     cc: str | None = None
+    bcc: str | None = None
     sender_header: str | None = None
     message_id: str | None = None
 
@@ -105,6 +114,7 @@ def _to_raw(pst_path: Path, message) -> RawMessage:
     sender = _safe_str(getattr(message, "sender_name", None))
     sent = getattr(message, "client_submit_time", None)
     sent_iso = sent.isoformat() if sent else None
+    display = _display_recipients(message)
 
     return RawMessage(
         pst_path=str(pst_path),
@@ -114,8 +124,9 @@ def _to_raw(pst_path: Path, message) -> RawMessage:
         headers_raw=headers_raw,
         sender_name=sender,
         sent_iso=sent_iso,
-        to=_first_match(_HEADER_TO, headers_raw),
-        cc=_first_match(_HEADER_CC, headers_raw),
+        to=_first_match(_HEADER_TO, headers_raw) or display.get(_PR_DISPLAY_TO),
+        cc=_first_match(_HEADER_CC, headers_raw) or display.get(_PR_DISPLAY_CC),
+        bcc=display.get(_PR_DISPLAY_BCC),
         sender_header=_first_match(_HEADER_FROM, headers_raw),
         message_id=_first_match(_HEADER_MESSAGE_ID, headers_raw),
     )
@@ -181,7 +192,7 @@ def _process_message(
             subject=msg.subject or None,
             content="[Email empty]",
             metadata=_email_metadata(msg, note="empty"),
-            alias_matched=matcher.matches(msg.subject, msg.to, msg.cc, msg.sender_name, msg.sender_header),
+            alias_matched=matcher.matches(msg.subject, msg.to, msg.cc, msg.bcc, msg.sender_name, msg.sender_header),
             thread_id=thread_id,
         )
         return
@@ -273,7 +284,7 @@ def _process_message(
                 part=i + 1 if len(parts) > 1 else None,
             ),
             alias_matched=matcher.matches(
-                part, msg.subject, msg.to, msg.cc, msg.sender_name, msg.sender_header
+                part, msg.subject, msg.to, msg.cc, msg.bcc, msg.sender_name, msg.sender_header
             ),
             thread_id=thread_id,
         )
@@ -284,6 +295,7 @@ def _email_metadata(msg: RawMessage, **extras) -> dict:
         "sender": msg.sender_name or msg.sender_header,
         "to": msg.to,
         "cc": msg.cc,
+        "bcc": msg.bcc,
         "sent": msg.sent_iso,
         "message_id": msg.message_id,
     }
@@ -351,6 +363,31 @@ def _read_body_attr(message, name: str) -> str:
         return _safe_str(getattr(message, name, None))
     except Exception:
         return ""
+
+
+def _display_recipients(message) -> dict[int, str]:
+    """Read PR_DISPLAY_TO/CC/BCC from the message's MAPI record sets.
+
+    These hold display names ("Jane Doe; John Roe"), not addresses. Corrupt
+    entries are skipped individually, like body reads.
+    """
+    wanted = (_PR_DISPLAY_TO, _PR_DISPLAY_CC, _PR_DISPLAY_BCC)
+    found: dict[int, str] = {}
+    try:
+        record_sets = [message.get_record_set(i) for i in range(message.number_of_record_sets)]
+    except Exception:
+        return found
+    for record_set in record_sets:
+        for i in range(record_set.number_of_entries):
+            try:
+                entry = record_set.get_entry(i)
+                if entry.entry_type in wanted and entry.entry_type not in found:
+                    value = _safe_str(entry.get_data_as_string()).strip()
+                    if value:
+                        found[entry.entry_type] = value
+            except Exception:
+                continue
+    return found
 
 
 def _first_match(pattern: re.Pattern[str], text: str) -> str | None:
