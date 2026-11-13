@@ -83,6 +83,10 @@ To withdraw individual classifications (for example failed evidence), use `dsar 
 - Recordings referenced in emails (call recorders, Teams) are often not in the export; ask for them.
 - `dsar report` writes every alias-matched chunk; on a big case that is over 1 GB. Reviewers use `results_scored.csv`.
 
+## 5a. Redacting documents for release
+
+Mark up documents element by element with the redaction tool (`dsar markup serve`), and export redacted copies from it: see [TOOLBOX.md](TOOLBOX.md). The redaction is a removal, not an overlay. Every decision is logged with the reviewer's name.
+
 ## 6. Pre-commit PD scan
 
 ```sh

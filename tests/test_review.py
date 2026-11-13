@@ -39,6 +39,53 @@ def test_evidence_highlight():
     assert review.evidence_spans("abc", "not there") == []
 
 
+def test_export_survives_control_characters(tmp_path: Path):
+    with db.connect(tmp_path / "dsar.sqlite") as conn:
+        db.init_schema(conn)
+        db.upsert_chunk(conn, Chunk(chunk_id="c-pdf", source_type="document", source_path="/in/report.pdf",
+                                    item_ref="p1", subject="Weekly\x07report", content="Page 1\x0cAlex Example was rude.",
+                                    metadata={}, alias_matched=True))
+        db.insert_classification(conn, chunk_id="c-pdf", score=8, description="reason", evidence="was rude",
+                                 special_return=None, raw_response="r", model="m", input_tokens=1,
+                                 output_tokens=1, cache_read_tokens=0)
+        assert review.export(conn, tmp_path / "review.xlsx")["rows"] == 1
+    ws = load_workbook(tmp_path / "review.xlsx", rich_text=True)["Review"]
+    header = [c.value for c in ws[1]]
+    row = {h: ws.cell(2, i + 1).value for i, h in enumerate(header)}
+    assert row["subject"] == "Weekly report"
+    assert "Page 1 Alex Example 【was rude】." in str(row["context"])
+
+
+def test_export_outstanding_only(tmp_path: Path):
+    _build(tmp_path / "dsar.sqlite")
+    with db.connect(tmp_path / "dsar.sqlite") as conn:
+        review.export(conn, tmp_path / "all.xlsx")
+        _fill(tmp_path / "all.xlsx", {"c-9": {"decision": "Disclose", "reason": "None", "reviewer": "HR One"}})
+        review.import_workbook(conn, tmp_path / "all.xlsx")
+        stats = review.export(conn, tmp_path / "open.xlsx", outstanding=True)
+    assert stats["rows"] == 2
+    ids = [r[0] for r in load_workbook(tmp_path / "open.xlsx")["Review"].iter_rows(min_row=2, values_only=True)]
+    assert sorted(ids) == ["c-7", "c-8-invented"]
+
+
+def test_status_column_puts_items_to_review_first(tmp_path: Path):
+    _build(tmp_path / "dsar.sqlite")
+    with db.connect(tmp_path / "dsar.sqlite") as conn:
+        review.export(conn, tmp_path / "all.xlsx")
+        _fill(tmp_path / "all.xlsx", {"c-9": {"decision": "Disclose", "reason": "None", "reviewer": "HR One"}})
+        review.import_workbook(conn, tmp_path / "all.xlsx")
+        review.export(conn, tmp_path / "again.xlsx")
+    rows = list(load_workbook(tmp_path / "again.xlsx")["Review"].iter_rows(min_row=2, values_only=True))
+    assert [(r[0], r[1]) for r in rows] == [("c-8-invented", "To review"), ("c-7", "To review"), ("c-9", "Done")]
+
+
+def test_export_chosen_ids_at_any_score(tmp_path: Path):
+    _build(tmp_path / "dsar.sqlite")
+    with db.connect(tmp_path / "dsar.sqlite") as conn:
+        stats = review.export(conn, tmp_path / "chosen.xlsx", min_score=0, ids={"c-3", "c-9"})
+    assert stats["rows"] == 2 and stats["by_score"] == {9: 1, 3: 1}
+
+
 def _fill(path: Path, decisions: dict) -> None:
     wb = load_workbook(path, rich_text=True)
     ws = wb["Review"]
@@ -65,7 +112,7 @@ def test_export_import_roundtrip(tmp_path: Path):
     first = {h: ws.cell(2, i + 1).value for i, h in enumerate(header)}
     assert first["review_id"] == "c-9" and first["custodian"] in ("", None) and first["from"] == "Team Lead"
     assert "keeps ignoring the agreed process" in str(first["context"])
-    assert not isinstance(first["context"], str)                       # rich text: evidence highlighted
+    assert "【keeps ignoring the agreed process】" in first["context"]
 
     _fill(path, {
         "c-9": {"assessment": "Agree", "decision": "Disclose", "reason": "None", "reviewer": "HR One",
