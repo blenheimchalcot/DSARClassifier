@@ -1300,9 +1300,12 @@ def markup_score_cmd(folder: str, config_path: str, system_prompt: str, run: aud
 @click.option("--markup-folder", "markup_folders", multiple=True,
               type=click.Path(exists=True, file_okay=False, path_type=Path),
               help="Extra folder of .txt files for the redaction tool (repeatable).")
+@click.option("--cases-root", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None,
+              help="Folder of <CASE-REF>/data case folders for the Cases page (default: the one holding this case).")
 @click.option("--port", type=int, default=0, help="Port on 127.0.0.1 (default: any free port).")
 @click.option("--no-browser", is_flag=True, help="Print the address instead of opening it.")
-def serve_cmd(config_path: str | None, free: bool, markup_folders: tuple[Path, ...], port: int, no_browser: bool) -> None:
+def serve_cmd(config_path: str | None, free: bool, markup_folders: tuple[Path, ...], cases_root: Path | None,
+              port: int, no_browser: bool) -> None:
     """Open the case web app and toolbox on this machine only (127.0.0.1). Ctrl-C to stop.
 
     Case-bound by default (needs DSAR_DATA_DIR): mailboxes open only from the input
@@ -1324,6 +1327,8 @@ def serve_cmd(config_path: str | None, free: bool, markup_folders: tuple[Path, .
                                        "Check DSAR_DATA_DIR, or use --free.")
         settings = webapp.Settings.for_case(data_dir, Path(config_path) if config_path else None,
                                             markup_folders=list(markup_folders))
+        if cases_root:
+            settings.cases_root = cases_root
         ctx = audit.run(data_dir / "output", "serve", {"config_path": config_path, "port": port,
                                                        "markup_folders": [str(p) for p in markup_folders]})
     with ctx as run:
@@ -1342,6 +1347,11 @@ def serve_cmd(config_path: str | None, free: bool, markup_folders: tuple[Path, .
         finally:
             server.server_close()
             server.app.extensions["dsar_mailboxes"].close_all()
+            if run is not None and settings.data_dir != data_dir:
+                # Switched case in the app: the case left open records the stop too.
+                audit.AuditLog(settings.output_dir).append("toolbox", "toolbox app case-close",
+                                                           {"reason": "server stopped", "serve_run": run.run_id})
+                run.data["closed_in_case"] = settings.case_ref
 
 
 @audit_group.command(name="note")

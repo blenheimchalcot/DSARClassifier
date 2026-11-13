@@ -17,7 +17,7 @@ dsar serve                       # case-bound: uses DSAR_DATA_DIR (and its confi
 dsar serve --free                # free-standing: no case (see below)
 ```
 
-Options: `--config` (case config, if it isn't in the data dir), `--markup-folder DIR` (an extra folder for the redaction tool, repeatable), `--port`, `--no-browser`.
+Options: `--config` (case config, if it isn't in the data dir), `--markup-folder DIR` (an extra folder for the redaction tool, repeatable), `--cases-root DIR` (where the Cases page looks; default: the folder holding this case), `--port`, `--no-browser`.
 
 The terminal prints a one-off address with a token. Open it, then **sign in with your full name**: it is recorded with everything you decide or export. `Ctrl-C` stops the server. Restarting it gives a new address, so close the old tab. Only this machine can connect, and pages from other sites can't use the session (strict same-site cookie, a CSRF check on every change, and only `127.0.0.1` / `localhost` accepted as the host). Request lines are not printed, because they carry search terms and file names.
 
@@ -32,6 +32,59 @@ The terminal prints a one-off address with a token. Open it, then **sign in with
 | Open attachment in another app | Not offered (it would copy subject data out of the case) | Offered on macOS, from a private temp folder deleted on exit |
 
 Use free-standing mode only for work that isn't a case, such as checking an export's structure.
+
+## Review and Personal Data Report
+
+**Review** replaces the review workbook for deciding on classified items. **Report** builds the Personal Data Report from those decisions and the redaction tool. Both need a case with a `dsar.sqlite`; the app never creates one.
+
+### Review queue
+
+Lists every item the model scored 7 or more (change *Min score* to see lower ones), plus any item already decided, under *To review*, *Needs passages* and *Done*. Search looks in subject, sender, file and text. An item page shows the whole chunk with the model's evidence highlighted (and whether that quote is really in the text), its metadata and source, the other chunks of the same item or thread, and every decision made on it.
+
+Decisions:
+
+| Decision | Needs | Goes to |
+|---|---|---|
+| Extract to Personal Data Report | One or more passages selected (*Extract selection*, or *Extract whole passage*) | The report, as text only |
+| Release in full | | The disclosure package (listed on the Report page; package building is still to do) |
+| Release in full with redactions | One or more passages selected to redact, each with a reason | As above |
+| Withhold (exemption applies) | The exemption | Not disclosed |
+| Not the subject's personal data | | Not disclosed |
+
+Optional: the score assessment and your own score, and notes (needed when a reason is *Other*). **Save and next** validates at once and moves to the next item to review. Decisions are append-only in `decisions` and `decision_spans` (dsar.sqlite); the newest one is current, and earlier ones stay in the item's history. Each passage is a character range of the chunk text, stored with the text's SHA-256: if the text changes, the decision no longer applies and the item is listed as outstanding. Every decision is written to the audit log (`review decide`) with your name, the decision, the number of passages and the text's hash. The model's score is never changed.
+
+Workbook decisions (`dsar review import`) keep their wording and count as made. For the report, a workbook *Disclose* is taken as the whole passage and flagged so it can be narrowed. A workbook *Disclose with redactions* recorded what to redact only in notes, so it is listed under *Needs passages* until the passages are selected in the app. The workbook commands still work as a fallback; `dsar review status` counts decisions from both.
+
+### Personal Data Report
+
+The Report page shows what the report holds now, what is outstanding, a preview of every extract with its sources, and earlier builds. **Build report** fills a copy of the controller's template:
+
+- Template: `Personal Data Report.docx` in `Templates/` in the project folder, or the folder in `DSAR_TEMPLATES_DIR`. Its intro is kept, the *INSERT DATA REPORT* guidance and *SAMPLE TABLE* label are removed, and the sample table becomes *Data Subject* (from the case config) then one *Extracted data N* row per extract.
+- Contents: passages extracted in Review, workbook *Disclose* passages, and every passage released in the redaction tool's folders. Text only. Identical extracts are merged, so each piece of data appears once. Ordered by the source's date (an item's sent date, or a `YYYY-MM-DD` in a redaction file's name), undated last.
+- Outstanding (makes the build a **DRAFT**, in the file name and in red on the first page): items 7+ not reviewed, workbook *Disclose with redactions* without passages, text changed since a decision, redaction-tool elements not yet decided, or no data subject name.
+- Output, read-only in `output/personal_data_report/`: `Personal_Data_Report_<case>_<UTC>[_DRAFT].docx` and `personal_data_report_register_<case>_<UTC>[_DRAFT].csv`. The register is private: every source of every extract (origin, date, type, sender, subject, source file, item, position, text hash, decision, reviewer). Both hashes and the template's are logged (`report personal-data`).
+
+Edit the Word copy for final wording if needed, save it as PDF and record what was sent (OPERATIONS). *Download copy* gives a copy of a build; downloads are logged too.
+
+## Cases page (switching case)
+
+**Cases** in the top bar lists every case under the cases root (each `<CASE-REF>/data` with an `output/` folder; folders starting `_` are skipped), with its data subject and the state of its audit log:
+
+| State | Meaning | Opening it |
+|---|---|---|
+| chain intact | Hash-chained `AUDIT_LOG.jsonl`, chain verified | Opens |
+| chain problems | `AUDIT_LOG.jsonl` whose chain check fails | Opens; the problems are recorded in the case-open entry. Investigate before relying on the case |
+| legacy | Run before the platform logged itself: a hand-written `AUDIT_LOG.md` only, or no log | Needs a tick to confirm. It starts the case's hash-chained log; the first entry says earlier work isn't in it and records the SHA-256 of the existing `AUDIT_LOG.md`, which is appended to, never rewritten |
+
+Only cases found there can be opened (the browser never sends a path). Switching:
+
+- writes `toolbox app case-close` in the case left and `toolbox app case-open` in the case opened, under the signed-in reviewer (with the config's SHA-256);
+- closes open mailboxes and uses only the new case's own `data/config.yaml`. `--config` and `--markup-folder` belong to the starting case and are not carried over;
+- rotates the session's CSRF value: a tab still showing the previous case gets *409, reload the page* on any change, and nothing is done.
+
+`serve` start and end stay in the starting case's log. If the app is stopped while another case is open, that case gets a `case-close` entry too.
+
+Legacy cases may lack what the toolbox expects (a mailbox opens only from a `dsar manifest`; stage status comes from the hash-chained log only). Treat them as read-mostly until their state has been checked.
 
 ## Case page
 

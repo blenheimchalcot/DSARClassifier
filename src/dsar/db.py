@@ -165,6 +165,37 @@ CREATE TABLE IF NOT EXISTS review_decisions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_review_decisions_chunk ON review_decisions(chunk_id);
+
+-- Decisions made in the web app's review queue (dsar.disclosure). Append-only like
+-- review_decisions: the newest row per chunk, across both tables, is the current
+-- decision. content_sha256 ties the decision and its spans to the exact text.
+CREATE TABLE IF NOT EXISTS decisions (
+    decision_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    chunk_id          TEXT NOT NULL,
+    content_sha256    TEXT NOT NULL,
+    model_score       INTEGER,
+    assessment        TEXT,
+    adjusted_score    INTEGER,
+    decision          TEXT NOT NULL,
+    reason            TEXT,
+    notes             TEXT,
+    reviewer          TEXT NOT NULL,
+    decided_at        TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_decisions_chunk ON decisions(chunk_id);
+
+-- Character ranges [start, end) of the chunk content: passages to extract into the
+-- Personal Data Report, or to redact from a released document (with a reason).
+CREATE TABLE IF NOT EXISTS decision_spans (
+    decision_id  INTEGER NOT NULL REFERENCES decisions(decision_id),
+    kind         TEXT NOT NULL,
+    start        INTEGER NOT NULL,
+    "end"        INTEGER NOT NULL,
+    reason       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_decision_spans_decision ON decision_spans(decision_id);
 """
 
 

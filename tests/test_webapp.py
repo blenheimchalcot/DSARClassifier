@@ -207,3 +207,94 @@ def test_redaction_tool_is_mounted_with_the_signed_in_reviewer(case):
     # The extracts folder holds .txt files but is never offered for redaction.
     listing = c.get("/toolbox/redaction/").get_data(as_text=True)
     assert len(re.findall(r"/toolbox/redaction/f/[0-9a-f]{12}/", listing)) == 1
+
+
+def _other_cases(case):
+    root = case.parent.parent
+    other = root / "DSAR-TEST-2" / "data"
+    (other / "output").mkdir(parents=True)
+    (other / "config.yaml").write_text((case / "config.yaml").read_text().replace("Sam Sample", "Alex Other"))
+    audit.AuditLog(other / "output").append("note", "audit note", {"text": "case opened"})
+    legacy = root / "DSAR-OLD" / "data"
+    (legacy / "output").mkdir(parents=True)
+    (legacy / "output" / "AUDIT_LOG.md").write_text("# Hand-written log\n")
+    (root / "_handover" / "data" / "output").mkdir(parents=True)
+    return other, legacy
+
+
+def test_cases_page_lists_cases_with_their_audit_log_state(case):
+    _other_cases(case)
+    app, c = client_for(webapp.Settings.for_case(case))
+    page = c.get("/cases/").get_data(as_text=True)
+    assert "DSAR-TEST-1" in page and "DSAR-TEST-2" in page and "Alex Other" in page
+    assert "DSAR-OLD" in page and "legacy" in page and "_handover" not in page
+
+
+def test_switching_case_is_logged_in_both_and_old_pages_cannot_act(case):
+    other, _ = _other_cases(case)
+    s = webapp.Settings.for_case(case)
+    app, c = client_for(s)
+    store = app.extensions["dsar_mailboxes"]
+    r = c.post("/cases/open", data={"case_ref": "DSAR-TEST-2", "csrf": c.csrf})
+    assert r.status_code == 302
+    assert s.case_ref == "DSAR-TEST-2" and s.data_dir == other and s.subject_name == "Alex Other"
+    assert app.extensions["dsar_mailboxes"] is not store and app.extensions["dsar_mailboxes"].data_dir == other
+    left = audit.AuditLog(case / "output").entries()[-1]
+    assert left["command"] == "toolbox app case-close" and left["data"]["to_case"] == "DSAR-TEST-2"
+    opened = audit.AuditLog(other / "output").entries()[-1]
+    assert opened["command"] == "toolbox app case-open" and opened["data"]["reviewer"] == "Test Reviewer"
+    assert opened["data"]["from_case"] == "DSAR-TEST-1" and "config" in opened["data"]["sha256"]
+    assert audit.AuditLog(other / "output").verify()[2] == []
+    # A tab loaded before the switch still holds the old CSRF value.
+    r = c.post("/toolbox/mail/api/open", json={"id": "x"}, headers={"X-CSRF": c.csrf})
+    assert r.status_code == 409 and "DSAR-TEST-2" in r.get_data(as_text=True)
+    assert "DSAR-TEST-2" in c.get("/").get_data(as_text=True)
+
+
+def test_only_listed_cases_open_and_legacy_needs_confirmation(case):
+    _, legacy = _other_cases(case)
+    s = webapp.Settings.for_case(case)
+    app, c = client_for(s)
+    r = c.post("/cases/open", data={"case_ref": "../../etc", "csrf": c.csrf})
+    assert "error=" in r.headers["Location"] and s.case_ref == "DSAR-TEST-1"
+    r = c.post("/cases/open", data={"case_ref": "DSAR-OLD", "csrf": c.csrf})
+    assert "error=" in r.headers["Location"] and s.case_ref == "DSAR-TEST-1"
+    assert not (legacy / "output" / audit.JSONL_NAME).exists()
+    md_before = hashlib.sha256((legacy / "output" / "AUDIT_LOG.md").read_bytes()).hexdigest()
+    r = c.post("/cases/open", data={"case_ref": "DSAR-OLD", "confirm_legacy": "1", "csrf": c.csrf})
+    assert r.status_code == 302 and s.case_ref == "DSAR-OLD"
+    entries = audit.AuditLog(legacy / "output").entries()
+    assert len(entries) == 1 and entries[0]["data"]["audit_log"] == "legacy"
+    assert "Earlier work is not in this log" in entries[0]["data"]["note"]
+    assert entries[0]["data"]["sha256"]["AUDIT_LOG.md (before)"] == md_before
+    assert (legacy / "output" / "AUDIT_LOG.md").read_text().startswith("# Hand-written log\n")
+
+
+def test_serve_logs_the_stop_in_a_case_switched_to(case, monkeypatch):
+    from click.testing import CliRunner
+
+    from dsar import cli
+    from dsar.webapp import cases
+
+    other, _ = _other_cases(case)
+
+    class Server:
+        def __init__(self, app):
+            self.app = app
+
+        def serve_forever(self):
+            with self.app.test_request_context():
+                cases.switch("DSAR-TEST-2", "Test Reviewer")
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+
+    monkeypatch.setattr(webapp, "make_server", lambda s, port: (Server(webapp.create_app(s)), "http://127.0.0.1:1/?token=x"))
+    monkeypatch.setenv("DSAR_DATA_DIR", str(case))
+    r = CliRunner().invoke(cli.main, ["serve", "--no-browser"])
+    assert r.exit_code == 0, r.output
+    last = audit.AuditLog(other / "output").entries()[-1]
+    assert last["command"] == "toolbox app case-close" and last["data"]["reason"] == "server stopped"
+    end = audit.AuditLog(case / "output").entries()[-1]
+    assert end["command"] == "serve" and end["event"] == "end" and end["data"]["closed_in_case"] == "DSAR-TEST-2"

@@ -330,8 +330,10 @@ def latest_decisions(conn: sqlite3.Connection) -> dict[str, dict]:
 
 
 def status(conn: sqlite3.Connection, min_score: int = MIN_SCORE) -> dict:
-    """Reviewed vs outstanding per model score, from the latest decision per item."""
-    decided = latest_decisions(conn)
+    """Reviewed vs outstanding per model score, from the latest decision per item (workbooks and the web app)."""
+    from dsar import disclosure
+
+    decided = disclosure.latest(conn)
     per_score: dict = {}
     for (score, chunk_id) in conn.execute("SELECT score, chunk_id FROM classifications WHERE score >= ?", (min_score,)):
         s = per_score.setdefault(score, {"items": 0, "decided": 0})

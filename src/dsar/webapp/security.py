@@ -6,7 +6,8 @@ Request guards for the local web app.
   cookie (SameSite=Strict) and the token is removed from the address bar.
 - Every page except sign-in needs a reviewer name.
 - Every state-changing request needs the session's CSRF value, in the
-  X-CSRF / X-Token header or a `csrf` form field.
+  X-CSRF / X-Token header or a `csrf` form field. Switching case rotates it,
+  so a page loaded for the previous case gets a 409 and changes nothing.
 - Responses forbid loading anything from other origins, so an HTML email
   shown in the viewer cannot fetch remote images (tracking pixels) or scripts.
 """
@@ -48,6 +49,10 @@ def install(app) -> None:
             sent = (request.headers.get("X-CSRF") or request.headers.get("X-Token")
                     or request.form.get("csrf") or "")
             if not secrets.compare_digest(sent, session.get("csrf", "")):
+                if sent and secrets.compare_digest(sent, session.get("csrf_prev", "")):
+                    # A page from before a case switch (webapp.cases): don't let it act on the new case.
+                    return (f"The case was changed to {settings.case_ref} after this page was loaded. "
+                            "Reload the page; nothing was done."), 409
                 abort(403)
         if not session.get("name") and endpoint not in _OPEN_ENDPOINTS:
             return redirect(url_for("main.signin", next=request.full_path))

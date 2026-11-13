@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Personal Data Report{% endblock %}
+{% block content %}
+<h1>Personal Data Report</h1>
+<p class="muted small">Built from the passages extracted in <a href="{{ url_for('review.queue') }}">Review</a> and those released in the <a href="{{ url_for('tool_redaction.index') }}">Redaction</a> tool's folders, into the template's table: extract text only, each piece once, oldest first. Every source of every extract goes in a private register beside the report, not in the report.</p>
+
+{% if not settings.subject_name %}<div class="err">No data subject name: the case folder has no <span class="mono">config.yaml</span>. The report would be a draft with the name left blank.</div>{% endif %}
+{% if not template_ok %}<div class="err">Template not found: <span class="mono">{{ template }}</span>. Put <b>Personal Data Report.docx</b> there or set <span class="mono">DSAR_TEMPLATES_DIR</span>.</div>
+{% else %}<p class="small">Template: <span class="mono">{{ template }}</span></p>{% endif %}
+
+<div class="cards">
+  <div class="card"><b>{{ data.extracts | length }}</b><span class="muted small">extracts in the report ({{ data.from_review }} from review, {{ data.from_redaction }} from redaction; duplicates merged)</span></div>
+  <div class="card"><b>{{ data.outstanding | length }}</b><span class="muted small">outstanding: the report is a DRAFT until this is 0</span></div>
+  <div class="card"><b>{{ data.review.documents | length }}</b><span class="muted small">items released as documents (in full or redacted): not in this report</span></div>
+</div>
+
+{% if data.review.whole_from_workbook %}
+<div class="note">{{ data.review.whole_from_workbook | length }} extract(s) come from workbook “Disclose” decisions and are the whole passage. Open them in Review and choose the passages to narrow them.</div>
+{% endif %}
+
+{% if data.outstanding %}
+<h2>Outstanding</h2>
+<table class="t">
+  <tr><th>Item</th><th>Why</th></tr>
+  {% for o in data.outstanding[:200] %}
+  <tr><td>{% if o.chunk_id %}<a href="{{ url_for('review.item', chunk_id=o.chunk_id) }}">{{ o.chunk_id }}</a>{% if o.score is defined and o.score is not none %} <span class="muted small">score {{ o.score }}</span>{% endif %}{% else %}<span class="mono">{{ o.file }}</span>{% endif %}</td><td class="small">{{ o.why }}</td></tr>
+  {% endfor %}
+  {% if data.outstanding | length > 200 %}<tr><td colspan="2" class="muted">… and {{ data.outstanding | length - 200 }} more</td></tr>{% endif %}
+</table>
+{% endif %}
+
+<h2>Build</h2>
+<p class="small">Writes a Word copy of the template and the register into <span class="mono">output/personal_data_report/</span>, read-only, with their SHA-256 in the audit log. Edit the Word copy for final wording, then save it as PDF for sending.</p>
+<button class="btn primary" id="build" {{ 'disabled' if not template_ok }}>Build {{ "draft " if data.outstanding or not settings.subject_name }}report</button>
+<div id="result"></div>
+
+{% if builds %}
+<h2>Built so far</h2>
+<table class="t">
+  <tr><th>File</th><th></th></tr>
+  {% for b in builds %}
+  <tr><td class="mono">{{ b.name }}</td><td>{% if b.draft %}<span class="pill warn">draft</span> {% endif %}<a class="btn sm" href="{{ url_for('review.report_file', name=b.name) }}">Download copy</a></td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+<h2>Preview ({{ data.extracts | length }})</h2>
+<table class="t">
+  <tr><th>#</th><th>Extracted data</th><th>Sources (private)</th></tr>
+  {% for e in data.extracts %}
+  <tr><td>{{ loop.index }}</td><td class="pre">{{ e.text }}</td>
+    <td class="small">{% for s in e.sources %}<div>{% if s.chunk_id %}<a href="{{ url_for('review.item', chunk_id=s.chunk_id) }}">{{ s.date[:10] or "undated" }} {{ s.source_type }}</a>{% else %}{{ s.date or "undated" }} {{ s.source_path.split('/')[-1] }}{% endif %}{% if s.span == "whole passage" %} <span class="pill warn">whole passage</span>{% endif %}</div>{% endfor %}</td></tr>
+  {% else %}
+  <tr><td colspan="3" class="muted">Nothing extracted yet.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='toolbox.js') }}"></script>
+<script>
+document.getElementById("build").onclick = async () => {
+  const btn = document.getElementById("build"), out = document.getElementById("result");
+  btn.disabled = true;
+  try {
+    const j = await DSAR.post("{{ url_for('review.report_build') }}", {});
+    out.innerHTML = j.success
+      ? `<div class="note">${j.draft ? "<b>Draft</b> built" : "Built"}: ${DSAR.esc(j.report)} (${j.extracts} extracts) and ${DSAR.esc(j.register)}. Logged in the case audit log. <a href="#" onclick="location.reload()">Refresh</a></div>`
+      : `<div class="err">${DSAR.esc(j.error)}</div>`;
+  } finally { btn.disabled = false; }
+};
+</script>
+{% endblock %}

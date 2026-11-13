@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Cases{% endblock %}
+{% block content %}
+<h1>Cases</h1>
+<p class="muted small">Cases under <span class="mono">{{ settings.cases_root }}</span>. Opening another case closes any open mailboxes and is recorded in both cases' audit logs under your name. Tabs still showing the previous case must be reloaded before they can change anything.</p>
+{% if error %}<div class="err">{{ error }}</div>{% endif %}
+<table class="t">
+  <tr><th>Case</th><th>Data subject</th><th>Audit log</th><th>Last entry (UTC)</th><th></th></tr>
+  {% for c in rows %}
+  {% set current = c.case_ref == settings.case_ref %}
+  <tr>
+    <td><b>{{ c.case_ref }}</b>{% if current %} <span class="pill ok">open</span>{% endif %}<div class="mono muted">{{ c.data_dir }}</div></td>
+    <td>{{ c.subject or "" }}{% if not c.config %}<div class="muted small">no config.yaml in the case folder</div>{% endif %}</td>
+    <td>
+      {% if c.status == "ok" %}<span class="pill ok">chain intact</span> <span class="small">{{ c.entries }} entries</span>
+      {% elif c.status == "problems" %}<span class="pill bad">chain problems</span> <span class="small">{{ c.entries }} entries</span>
+        <div class="small">{{ c.problems[:3] | join("; ") }}{% if c.problems | length > 3 %} …{% endif %}</div>
+      {% else %}<span class="pill warn">legacy</span>
+        <div class="small muted">{{ "Hand-written AUDIT_LOG.md only" if c.legacy_md else "No audit log" }}: from before the platform logged itself.</div>
+      {% endif %}
+    </td>
+    <td class="small">{{ c.last }}</td>
+    <td>
+      {% if not current %}
+      <form method="post" action="{{ url_for('main.cases_open') }}">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="case_ref" value="{{ c.case_ref }}">
+        {% if c.status == "legacy" %}
+        <label class="small"><input type="checkbox" name="confirm_legacy" value="1" required> Start a hash-chained audit log in this case{% if c.legacy_md %} (the existing AUDIT_LOG.md is appended to, not rewritten){% endif %}</label><br>
+        {% endif %}
+        <button class="btn sm{{ ' primary' if c.status == 'ok' }}">Open</button>
+      </form>
+      {% endif %}
+    </td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="muted">No cases found: each case is <span class="mono">&lt;CASE-REF&gt;/data</span> with an <span class="mono">output/</span> folder.</td></tr>
+  {% endfor %}
+</table>
+<p class="muted small">Legacy cases were run before the platform wrote its own audit log, and may not have the manifests or outputs the toolbox expects (a mailbox opens only from a <span class="mono">dsar manifest</span>). Opening one starts its hash-chained log; everything done in the app from then on is recorded.</p>
+{% endblock %}

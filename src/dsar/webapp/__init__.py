@@ -32,6 +32,7 @@ class Settings:
     token: str = field(default_factory=lambda: secrets.token_urlsafe(24))
     subject_name: str = ""
     case_ref: str = ""
+    cases_root: Path | None = None          # where the case picker looks (webapp.cases)
 
     @property
     def case_bound(self) -> bool:
@@ -54,6 +55,7 @@ class Settings:
             except Exception:
                 subject = ""
         case_ref = data_dir.parent.name if data_dir.name == "data" else data_dir.name
+        kw.setdefault("cases_root", data_dir.parent.parent if data_dir.name == "data" else data_dir.parent)
         return cls(data_dir=data_dir, config_path=Path(config_path) if config_path else None,
                    subject_name=subject, case_ref=case_ref, **kw)
 
@@ -61,7 +63,7 @@ class Settings:
 def create_app(settings: Settings) -> Flask:
     from dsar import toolbox
     from dsar.toolbox.mailbox.store import MailboxStore
-    from dsar.webapp import security, views
+    from dsar.webapp import review, security, views
 
     app = Flask(__name__)
     app.secret_key = secrets.token_bytes(32)
@@ -76,6 +78,7 @@ def create_app(settings: Settings) -> Flask:
     app.extensions["dsar_mailboxes"] = MailboxStore(settings.data_dir)
     security.install(app)
     app.register_blueprint(views.bp)
+    app.register_blueprint(review.bp)
     for tool in toolbox.TOOLS:
         app.register_blueprint(tool.blueprint(), url_prefix=f"/toolbox/{tool.key}")
 
