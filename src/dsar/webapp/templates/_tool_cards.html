@@ -1,0 +1,5 @@
+<div class="cards">
+  {% for t in tools %}
+  <a class="card" href="{{ url_for(t.endpoint) }}"><b>{{ t.name }}</b><span class="muted small">{{ t.description }}</span></a>
+  {% endfor %}
+</div>

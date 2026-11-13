@@ -3,6 +3,11 @@
 ## 0.3.0 (unreleased)
 
 ### Added
+- **Web app: `dsar serve`** (`src/dsar/webapp/`, [docs/TOOLBOX.md](docs/TOOLBOX.md)). One local Flask server (127.0.0.1, one-off token, sign-in by name) for the case page and every toolbox tool. The case page shows each pipeline stage's status, `progress.json` and the audit-log chain check. Case-bound by default: mailboxes open only from the input manifest after a hash check, exports are saved read-only in `output/toolbox/` and audit-logged under the reviewer. `--free` runs without a case and logs nothing.
+- **Mail viewer** (from the PSTViewer project): PST and MBOX folders, messages, attachments and search. Recipients come from the display properties when there are no headers, and the RTF body is used when there is no other. HTML bodies are sandboxed with remote content blocked. Saves messages (.eml), attachments and a whole mailbox (.xlsx) into the case.
+- **Teams viewer** (from the PSTViewer project): every Teams conversation in a PST, grouped by thread ID (property `0x366D`) so a group or meeting chat stays whole when members change, plus participants and a PDF transcript with source hash and producer.
+- The redaction tool is mounted in the app under the signed-in reviewer. Its events file now has one lock per file, shared across requests.
+- `flask` and `reportlab` added to the dependencies.
 - **Toolbox** (`src/dsar/toolbox/`, [docs/TOOLBOX.md](docs/TOOLBOX.md)), with its first tool: **redaction**. `dsar markup serve FOLDER` is a local (127.0.0.1, token) web page to approve, redact all or redact part of each element (transcript turn or paragraph), split mis-attributed turns, and export a redacted copy with the text removed and a redaction log. Decisions are append-only, hash-chained and tied to each file's SHA-256 and span. `dsar markup score FOLDER` adds a 0-10 hint per element from the local model.
 - `dsar review export --outstanding` (undecided items only) and `--ids FILE` (chosen items, any score).
 - A **status** column in review workbooks (*To review* first, then *Done*).

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Teams viewer{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('tool_mail.static', filename='mail.css') }}">
+<link rel="stylesheet" href="{{ url_for('tool_teams.static', filename='teams.css') }}">
+{% endblock %}
+{% block body %}
+<div class="full" id="teamsapp" data-case="{{ 1 if settings.case_bound else 0 }}" data-subject="{{ settings.subject_name }}">
+  <div class="mv-toolbar">
+    <div id="pick-case" class="mv-pick" hidden>
+      <select id="source-select" aria-label="Mailbox"></select>
+      <button id="open-btn" class="btn primary">Open</button>
+    </div>
+    <div id="pick-free" class="mv-pick" hidden>
+      <input type="text" id="path-input" placeholder="Full path to a .pst file" spellcheck="false" autocomplete="off">
+      <button id="browse-btn" class="btn">Browse…</button>
+      <button id="add-btn" class="btn primary">Open</button>
+    </div>
+    <span id="status" class="mv-status" role="status"></span>
+  </div>
+  <div class="tv-panes">
+    <aside class="mv-pane">
+      <div class="tv-tabs">
+        <button id="tab-convs" class="on">Conversations <span id="n-convs"></span></button>
+        <button id="tab-people">People <span id="n-people"></span></button>
+      </div>
+      <div class="tv-filter"><input type="search" id="filter" placeholder="Filter by name" disabled></div>
+      <div id="side" class="mv-scroll"><p class="mv-hint">Open a PST to list its Teams chats.</p></div>
+    </aside>
+    <article class="mv-pane mv-detail">
+      <div class="mv-head"><span id="conv-title">Conversation</span>
+        <button id="pdf-btn" class="btn sm" disabled>{{ "Save PDF to case" if settings.case_bound else "Download PDF" }}</button></div>
+      <div id="saved"></div>
+      <div id="conv" class="mv-scroll"><p class="mv-hint">Choose a conversation.</p></div>
+    </article>
+  </div>
+  <div id="busy" class="mv-busy" hidden><div class="mv-spin"></div><span id="busy-text">Loading…</span></div>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='toolbox.js') }}"></script>
+<script src="{{ url_for('tool_teams.static', filename='teams.js') }}"></script>{% endblock %}

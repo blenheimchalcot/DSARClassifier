@@ -23,6 +23,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "click>=8.1.7",
     "tqdm>=4.66.0",
+    "flask>=3.1",                 # local web app and toolbox (dsar serve)
+    "reportlab>=4.2",             # Teams transcript PDFs
 ]
 
 [project.optional-dependencies]
@@ -36,6 +38,9 @@ dsar = "dsar.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+dsar = ["webapp/templates/*.html", "webapp/static/*", "toolbox/*/templates/*/*.html", "toolbox/*/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

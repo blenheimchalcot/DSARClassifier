@@ -41,6 +41,8 @@ RUNTIME_MODULES = {
     "dotenv": ".env",
     "click": "CLI",
     "httpx": "Ollama client",
+    "flask": "web app and toolbox (dsar serve)",
+    "reportlab": "Teams transcript PDFs",
 }
 
 MIN_CONTEXT_TOKENS = 8192
