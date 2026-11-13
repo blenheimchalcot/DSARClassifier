@@ -125,6 +125,30 @@ def test_model_scores_are_shown_per_element(folder: markup.Folder):
     assert doc["decisions"] == {}                                   # a hint, not a decision
 
 
+def test_extracts_merge_duplicates_and_leave_out_redactions(folder: markup.Folder):
+    (folder.folder / "03_copy.txt").write_text("Alex, Pat Neighbour called.\n")
+    for d in folder.docs():
+        for el in d["elements"]:
+            body = {"file": d["name"], "sha256": d["sha256"], "action": "decide", "element": el["id"]}
+            if el["who"] == "Sam Staff":
+                folder.act({**body, "decision": "redact_full", "reason": markup.REASONS[1]})
+            elif "Pat Neighbour" in markup.element_text(d["text"], el) and d["name"] == "01_transcript.txt":
+                a = d["text"].index("Pat Neighbour")
+                folder.act({**body, "decision": "redact_partial",
+                            "redactions": [{"start": a, "end": a + 13, "reason": markup.REASONS[0]}]})
+            else:
+                folder.act({**body, "decision": "release"})
+    result = folder.export_extracts()
+    report = Path(result["report"]).read_text()
+    assert "Welcome" not in report and "I live with Pat" not in report          # redacted text left out
+    assert "I live with" in report and "I like maths" in report
+    assert report.count("Alex, Pat Neighbour called.") == 1                      # same text in two files, once
+    assert result["merged_duplicates"] == 1 and not result["undecided"]
+    register = Path(result["register"]).read_text()
+    assert register.count("Alex, Pat Neighbour called.") == 2                    # both sources kept in the register
+    assert "markup_extracts" in (folder.case_output / "AUDIT_LOG.jsonl").read_text()
+
+
 def test_decisions_on_a_changed_file_are_set_aside(folder: markup.Folder):
     doc = _doc(folder, "02_email.txt")
     folder.act({"file": doc["name"], "sha256": doc["sha256"], "action": "decide",
