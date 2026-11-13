@@ -14,11 +14,17 @@ mark can never drift onto other text.
 element, with the case prompt and scale, into FOLDER/markup_scores.jsonl. The page
 shows it as a hint beside each element; it is never recorded as a decision.
 
+"Export Personal Data extracts" collects every released passage across the
+folder into plain report text: one extract per passage, identical extracts
+merged, no headings or sources. A private register beside it lists every
+source of each extract, for the case record only.
+
 The export page is a true redaction: redacted text is removed before the page is
 built, never hidden with styling. Printing it to PDF gives the release copy, and
 each export is saved next to the files and logged in the case audit log.
 Nothing leaves the machine; the page loads no external resources.
 """
+import csv
 import hashlib
 import html
 import json
@@ -37,13 +43,15 @@ from dsar import audit
 EVENTS_NAME = "markup_events.jsonl"
 SCORES_NAME = "markup_scores.jsonl"
 EXPORT_DIR = "redacted_exports"
+EXTRACT_DIR = "personal_data_extracts"
 GENESIS = "0" * 64
 REASONS = [
     "Third-party personal data",
     "Not the requester's personal data",
     "Legal professional privilege",
     "Confidential reference",
-    "Other (see note)",
+    "Duplicate – already in the Personal Data Report",
+    "Other (see note)",                 # keep last: it needs a note
 ]
 # A speaker name may be broken across one line break ("Firstname\nSurname:").
 _TURN = re.compile(r"(\d\d:\d\d:\d\d)(?:\.\d+)?\s*-\s*[\d:.]+\s+([^:\n]{1,40}(?:\n[^:\n]{1,40})?):[ \t]*")
@@ -322,6 +330,66 @@ class Folder:
                 "events_sha256": audit.sha256_file(self.events.path) if self.events.path.exists() else None})
         return page, path
 
+    def export_extracts(self) -> dict:
+        """Write the report text and the private extract register for the whole folder."""
+        docs = self.docs()
+        items = extracts(docs)
+        undecided = {d["name"]: len(d["elements"]) - len(d["decisions"]) for d in docs
+                     if len(d["decisions"]) < len(d["elements"])}
+        out_dir = self.folder / EXTRACT_DIR
+        out_dir.mkdir(exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ("_DRAFT" if undecided else "")
+        report = out_dir / f"personal_data_extracts_{stamp}.txt"
+        report.write_text("\n\n".join(i["text"] for i in items) + "\n", encoding="utf-8")
+        register = out_dir / f"extract_register_{stamp}.csv"
+        with register.open("w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["extract_no", "extract", "source_file", "file_sha256", "element", "speaker", "time",
+                        "decision", "reviewer", "decided_utc"])
+            for n, item in enumerate(items, start=1):
+                for src in item["sources"]:
+                    w.writerow([n, item["text"], src["file"], src["file_sha256"], src["element"], src["speaker"],
+                                src["time"], src["decision"], src["reviewer"], src["decided"]])
+        for p in (report, register):
+            p.chmod(0o444)
+        result = {"extracts": len(items), "sources": sum(len(i["sources"]) for i in items),
+                  "merged_duplicates": sum(len(i["sources"]) - 1 for i in items), "undecided": undecided,
+                  "report": str(report), "report_sha256": audit.sha256_file(report),
+                  "register": str(register), "register_sha256": audit.sha256_file(register)}
+        if self.case_output:
+            audit.AuditLog(self.case_output).append("markup_extracts", "markup extracts", {
+                **result, "reviewer": self.reviewer,
+                "events_sha256": audit.sha256_file(self.events.path) if self.events.path.exists() else None})
+        return result
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"\W+", " ", text).strip().lower()
+
+
+def extracts(docs: list[dict]) -> list[dict]:
+    """Released text of every decided element, one extract per released passage, identical ones merged.
+
+    Undecided elements are left out. Order is the order first seen (file, then element).
+    """
+    merged: dict[str, dict] = {}
+    for d in docs:
+        for el in d["elements"]:
+            dec = d["decisions"].get(el["id"])
+            if not dec:
+                continue
+            for a, b in el["parts"]:
+                for piece, r in redacted_text(d["text"], a, b, dec["redactions"]):
+                    text = " ".join(piece.split())
+                    key = _norm(text)
+                    if r is not None or not key:
+                        continue
+                    item = merged.setdefault(key, {"text": text, "sources": []})
+                    item["sources"].append({"file": d["name"], "file_sha256": d["sha256"], "element": el["id"],
+                                            "speaker": el["who"] or el["label"], "time": el["t"] or "",
+                                            "decision": dec["decision"], "reviewer": dec["reviewer"], "decided": dec["ts"]})
+    return list(merged.values())
+
 
 def render_export(doc: dict, reviewer: str) -> str:
     """Printable redacted copy. Redacted text is never written into the page."""
@@ -460,6 +528,8 @@ class _Handler(BaseHTTPRequestHandler):
         if url.path == "/api/docs":
             return self._send(200, json.dumps({"reviewer": self.folder.reviewer, "docs": self.folder.docs(),
                                                "chain_ok": self.folder.events.verify()}))
+        if url.path == "/api/extracts":
+            return self._send(200, json.dumps(self.folder.export_extracts()))
         if url.path == "/export":
             try:
                 page, path = self.folder.export(q["file"][0])
@@ -553,7 +623,7 @@ details.more .menu button{display:block;width:100%;text-align:left;border:0;back
 .toast{position:fixed;bottom:16px;right:16px;background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:6px;font-size:14px;display:none}
 @media (max-width:760px){.app{grid-template-columns:1fr}nav{position:static;height:auto}main{padding:0 16px 48px}}
 </style></head><body>
-<div class="app"><nav><div class="who" id="who"></div><div id="files"></div></nav><main id="main"></main></div><div class="toast" id="toast"></div>
+<div class="app"><nav><div class="who" id="who"></div><div id="files"></div><button class="btn primary" id="ext" style="margin-top:16px;width:100%">Export Personal Data extracts</button><div id="extres" class="keys" style="margin-top:8px"></div></nav><main id="main"></main></div><div class="toast" id="toast"></div>
 <script>
 const TOKEN=new URLSearchParams(location.search).get("token")||(document.querySelector('meta[name="csrf"]')||{}).content,REASONS=__REASONS__,SUBJECT=(new URLSearchParams(location.search).get("subject")||"").toLowerCase();
 const COLOURS=["#2f5d8a","#2e7d4f","#8a4b9c","#b5651d","#1f7a8c"];
@@ -671,5 +741,9 @@ document.addEventListener("mouseup",()=>{if(!edit)return;const sel=getSelection(
  for(const [pa,pb] of el.parts){let s=Math.max(a,pa),e=Math.min(b,pb);while(s<e&&/\s/.test(d.text[s]))s++;while(e>s&&/\s/.test(d.text[e-1]))e--;if(e<=s)continue;
   const keep=[];for(const k of edit.marks){if(k.end<s||k.start>e)keep.push(k);else{s=Math.min(s,k.start);e=Math.max(e,k.end)}}keep.push({start:s,end:e,reason,note});edit.marks=keep}
  sel.removeAllRanges();render()});
+document.getElementById("ext").onclick=async()=>{const und=DOCS.filter(d=>Object.keys(d.decisions).length<d.elements.length);
+ if(und.length&&!confirm(und.length+" file(s) still have elements not reviewed; those elements are left out and the export is marked DRAFT. Export anyway?"))return;
+ const j=await (await fetch("api/extracts?token="+TOKEN)).json();
+ document.getElementById("extres").innerHTML=`${j.extracts} extract(s) from ${j.sources} passage(s); ${j.merged_duplicates} duplicate(s) merged.<br>Saved to ${esc(j.report.split("/").slice(-2).join("/"))} and the register beside it.`;toast("Extracts exported")};
 load();
 </script></body></html>"""

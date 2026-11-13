@@ -199,3 +199,11 @@ def test_redaction_tool_is_mounted_with_the_signed_in_reviewer(case):
                      "decision": "release"})
     assert r.status_code == 200 and r.get_json()["reviewer"] == "Test Reviewer"
     assert c.post(f"/toolbox/redaction/f/{fid}/api/act", json={}).status_code == 403
+    assert 'fetch("api/extracts' in page
+    ext = c.get(f"/toolbox/redaction/f/{fid}/api/extracts").get_json()
+    assert ext["extracts"] == 1 and ext["undecided"] == {"note.txt": 1}
+    entry = [e for e in audit.AuditLog(case / "output").entries() if e["command"] == "markup extracts"][-1]
+    assert entry["data"]["reviewer"] == "Test Reviewer"
+    # The extracts folder holds .txt files but is never offered for redaction.
+    listing = c.get("/toolbox/redaction/").get_data(as_text=True)
+    assert len(re.findall(r"/toolbox/redaction/f/[0-9a-f]{12}/", listing)) == 1

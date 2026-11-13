@@ -20,7 +20,7 @@ from dsar.webapp import records
 
 TOOL = "redaction"
 bp = Blueprint("tool_redaction", __name__, template_folder="templates")
-_SKIP = {markup.EXPORT_DIR, records.TOOLBOX_DIR}
+_SKIP = {markup.EXPORT_DIR, markup.EXTRACT_DIR, records.TOOLBOX_DIR}
 _added: dict[str, Path] = {}
 
 
@@ -104,6 +104,11 @@ def act(fid):
     except (KeyError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify(entry)
+
+
+@bp.route("/f/<fid>/api/extracts")
+def extracts(fid):
+    return jsonify(_folder(fid).export_extracts())
 
 
 @bp.route("/f/<fid>/export")
