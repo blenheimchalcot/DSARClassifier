@@ -119,9 +119,15 @@ def _overlaps(x: list, y: list) -> bool:
 class Events:
     """Append-only, hash-chained log of markup actions in one folder."""
 
+    # One lock per events file, shared by every Events object for it: the web app
+    # builds a Folder per request, and two appends must never read the same tail.
+    _locks: dict[str, threading.Lock] = {}
+    _guard = threading.Lock()
+
     def __init__(self, folder: Path):
         self.path = Path(folder) / EVENTS_NAME
-        self._lock = threading.Lock()
+        with Events._guard:
+            self._lock = Events._locks.setdefault(str(self.path.resolve()), threading.Lock())
 
     def lines(self) -> list[str]:
         if not self.path.exists():
@@ -619,15 +625,15 @@ details.more .menu button{display:block;width:100%;text-align:left;border:0;back
 </style></head><body>
 <div class="app"><nav><div class="who" id="who"></div><div id="files"></div><button class="btn primary" id="ext" style="margin-top:16px;width:100%">Export Personal Data extracts</button><div id="extres" class="keys" style="margin-top:8px"></div></nav><main id="main"></main></div><div class="toast" id="toast"></div>
 <script>
-const TOKEN=new URLSearchParams(location.search).get("token"),REASONS=__REASONS__,SUBJECT=(new URLSearchParams(location.search).get("subject")||"").toLowerCase();
+const TOKEN=new URLSearchParams(location.search).get("token")||(document.querySelector('meta[name="csrf"]')||{}).content,REASONS=__REASONS__,SUBJECT=(new URLSearchParams(location.search).get("subject")||"").toLowerCase();
 const COLOURS=["#2f5d8a","#2e7d4f","#8a4b9c","#b5651d","#1f7a8c"];
 const LABEL={release:"Released",redact_full:"Redacted in full",redact_partial:"Partly redacted",pending:"Not reviewed"};
 let DOCS=[],cur=0,view="original",q="",edit=null,full=null,split=null,minScore=-1,focus=null,lastReason=REASONS[0],doneOpen=false,openRow=null;
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const reasonOpts=()=>REASONS.map(x=>`<option>${esc(x)}</option>`).join("");
 function toast(m){const t=document.getElementById("toast");t.textContent=m;t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",3000)}
-async function load(keep){const j=await (await fetch("/api/docs?token="+TOKEN)).json();DOCS=j.docs;document.getElementById("who").innerHTML="Reviewer: <b>"+esc(j.reviewer)+"</b>"+(j.chain_ok?"":" · <span style='color:var(--red)'>event log chain broken</span>");if(!keep)cur=0;nav();render();if(!focus){const d=DOCS[cur];focus=(d.elements.find(e=>!d.decisions[e.id])||{}).id;render()}}
-async function act(body){Object.assign(body,{file:DOCS[cur].name,sha256:DOCS[cur].sha256});const r=await fetch("/api/act",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify(body)});const j=await r.json();if(!r.ok){toast(j.error);return false}return true}
+async function load(keep){const j=await (await fetch("api/docs?token="+TOKEN)).json();DOCS=j.docs;document.getElementById("who").innerHTML="Reviewer: <b>"+esc(j.reviewer)+"</b>"+(j.chain_ok?"":" · <span style='color:var(--red)'>event log chain broken</span>");if(!keep)cur=0;nav();render();if(!focus){const d=DOCS[cur];focus=(d.elements.find(e=>!d.decisions[e.id])||{}).id;render()}}
+async function act(body){Object.assign(body,{file:DOCS[cur].name,sha256:DOCS[cur].sha256});const r=await fetch("api/act",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify(body)});const j=await r.json();if(!r.ok){toast(j.error);return false}return true}
 function nav(){const f=document.getElementById("files");f.innerHTML="";DOCS.forEach((d,i)=>{const n=Object.keys(d.decisions).length,b=document.createElement("button");b.className=i===cur?"on":"";b.innerHTML=esc(d.name.replace(/\.txt$/,"").replace(/_/g," "))+`<span class="prog">${n}/${d.elements.length} reviewed · ${d.redactions.length} redaction(s)</span>`;b.onclick=()=>{if(edit&&!confirm("Discard unsaved marks?"))return;cur=i;q="";edit=null;full=null;split=null;focus=(d.elements.find(e=>!d.decisions[e.id])||{}).id;nav();render();scrollTo(0,0)};f.appendChild(b)})}
 function hl(s){let e=esc(s);if(q){const re=new RegExp("("+q.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+")","gi");e=e.replace(re,"<mark>$1</mark>")}return e}
 // One part [a,b] of an element, with redactions rs; cls is the class for released text
@@ -689,7 +695,7 @@ function render(){const d=DOCS[cur],m=document.getElementById("main");if(!d){m.i
  const dt=document.getElementById("dtoggle");if(dt)dt.onclick=()=>{doneOpen=!doneOpen;openRow=null;render()};
  m.querySelectorAll(".row").forEach(r=>r.onclick=()=>{openRow=r.dataset.row;focus=openRow;render()});
  document.getElementById("min").onchange=ev=>{minScore=+ev.target.value;render()};
- document.getElementById("exp").onclick=()=>window.open("/export?token="+TOKEN+"&file="+encodeURIComponent(d.name),"_blank");
+ document.getElementById("exp").onclick=()=>window.open("export?token="+TOKEN+"&file="+encodeURIComponent(d.name),"_blank");
  document.getElementById("all").onclick=async()=>{const todo=d.elements.filter(e=>!d.decisions[e.id]);if(!todo.length||!confirm(`Approve ${todo.length} element(s) not yet reviewed, for release as they are?`))return;for(const e of todo)if(!await act({action:"decide",element:e.id,decision:"release"}))break;await load(true)};
  m.querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const id=b.closest(".el").dataset.el,a=b.dataset.a;
   if(a==="approve"){if(DOCS[cur].decisions[id]?.decision==="release")return advance(id);if(await act({action:"decide",element:id,decision:"release"})){await load(true);advance(id)}}
@@ -737,7 +743,7 @@ document.addEventListener("mouseup",()=>{if(!edit)return;const sel=getSelection(
  sel.removeAllRanges();render()});
 document.getElementById("ext").onclick=async()=>{const und=DOCS.filter(d=>Object.keys(d.decisions).length<d.elements.length);
  if(und.length&&!confirm(und.length+" file(s) still have elements not reviewed; those elements are left out and the export is marked DRAFT. Export anyway?"))return;
- const j=await (await fetch("/api/extracts?token="+TOKEN)).json();
+ const j=await (await fetch("api/extracts?token="+TOKEN)).json();
  document.getElementById("extres").innerHTML=`${j.extracts} extract(s) from ${j.sources} passage(s); ${j.merged_duplicates} duplicate(s) merged.<br>Saved to ${esc(j.report.split("/").slice(-2).join("/"))} and the register beside it.`;toast("Extracts exported")};
 load();
 </script></body></html>"""

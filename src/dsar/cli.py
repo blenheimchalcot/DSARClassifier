@@ -1293,6 +1293,57 @@ def markup_score_cmd(folder: str, config_path: str, system_prompt: str, run: aud
                f"{result['already_scored']} already scored.")
 
 
+@main.command(name="serve")
+@click.option("--config", "config_path", default=None,
+              help="Case config (default: config.yaml in $DSAR_DATA_DIR if there is one), for the subject's name.")
+@click.option("--free", is_flag=True, help="Free-standing: no case, no manifest checks, no audit log. Not for case work.")
+@click.option("--markup-folder", "markup_folders", multiple=True,
+              type=click.Path(exists=True, file_okay=False, path_type=Path),
+              help="Extra folder of .txt files for the redaction tool (repeatable).")
+@click.option("--port", type=int, default=0, help="Port on 127.0.0.1 (default: any free port).")
+@click.option("--no-browser", is_flag=True, help="Print the address instead of opening it.")
+def serve_cmd(config_path: str | None, free: bool, markup_folders: tuple[Path, ...], port: int, no_browser: bool) -> None:
+    """Open the case web app and toolbox on this machine only (127.0.0.1). Ctrl-C to stop.
+
+    Case-bound by default (needs DSAR_DATA_DIR): mailboxes open only from the input
+    manifest after a hash check, exports are saved read-only in the case, and actions
+    are written to the audit log. --free runs without a case.
+    """
+    import contextlib
+    import webbrowser
+
+    from dsar import webapp
+
+    if free:
+        settings = webapp.Settings(markup_folders=list(markup_folders))
+        ctx = contextlib.nullcontext(None)
+    else:
+        data_dir = _data_dir()
+        if not (data_dir / "output").is_dir():
+            raise click.ClickException(f"{data_dir} doesn't look like a case data dir (no output/). "
+                                       "Check DSAR_DATA_DIR, or use --free.")
+        settings = webapp.Settings.for_case(data_dir, Path(config_path) if config_path else None,
+                                            markup_folders=list(markup_folders))
+        ctx = audit.run(data_dir / "output", "serve", {"config_path": config_path, "port": port,
+                                                       "markup_folders": [str(p) for p in markup_folders]})
+    with ctx as run:
+        if run is not None and settings.config_path:
+            run.hash_file("config", settings.config_path)
+        server, url = webapp.make_server(settings, port)
+        mode = (f"case {settings.case_ref} ({settings.data_dir})" if settings.case_bound
+                else "FREE-STANDING (no case, nothing logged)")
+        click.echo(f"DSAR web app: {mode}\nOpen {url}\nThis address is for you only; don't share it. Ctrl-C to stop.")
+        if not no_browser:
+            webbrowser.open(url)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
+            server.app.extensions["dsar_mailboxes"].close_all()
+
+
 @audit_group.command(name="note")
 @click.argument("text")
 def audit_note(text: str) -> None:

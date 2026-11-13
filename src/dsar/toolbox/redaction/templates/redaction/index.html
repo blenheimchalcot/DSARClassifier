@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Redaction{% endblock %}
+{% block content %}
+<h1>Redaction</h1>
+<p class="muted">Choose a folder of UTF-8 <code>.txt</code> files to mark up. Each decision is saved as you make it, under your name, in the folder's <code>markup_events.jsonl</code>. See docs/TOOLBOX.md.</p>
+{% if error %}<div class="err">{{ error }}</div>{% endif %}
+<table class="t">
+  <tr><th>Folder</th><th>.txt files</th><th>Recorded events</th><th></th></tr>
+  {% for r in rows %}
+  <tr><td class="mono">{{ r.label }}</td><td>{{ r.files }}</td><td>{{ r.events }}</td>
+    <td><a class="btn sm primary" href="{{ url_for('.page', fid=r.id) }}">Open</a></td></tr>
+  {% else %}
+  <tr><td colspan="4" class="muted">{% if settings.case_bound %}No folder under the case output/ holds .txt files yet. Copy the documents to review into, for example, <code>output/deep_dive_&lt;date&gt;/</code>.{% else %}No folders yet. Add one below, or start with <code>--markup-folder</code>.{% endif %}</td></tr>
+  {% endfor %}
+</table>
+{% if not settings.case_bound %}
+<h2>Add a folder</h2>
+<form method="post" action="{{ url_for('.add') }}" class="card">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="text" name="path" placeholder="Full path to a folder of .txt files" style="width:70%">
+  <button class="btn primary">Add</button>
+</form>
+{% endif %}
+{% endblock %}

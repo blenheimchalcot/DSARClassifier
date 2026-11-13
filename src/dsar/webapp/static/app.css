@@ -1,0 +1,46 @@
+/* DSAR web app: shared look. Local only: no external fonts or assets. */
+:root{--bg:#f6f6f3;--panel:#fff;--ink:#1d1d1b;--muted:#6b6b66;--line:#e2e1dc;--accent:#2f5d8a;--accent-ink:#fff;
+--ok:#2e7d4f;--okbg:#e6f4ea;--warn:#8a5a00;--warnbg:#fdf0d5;--bad:#b3261e;--badbg:#fbe3e1;--hl:#fff4d6;
+--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--panel:#1f1f1d;--ink:#ecebe6;--muted:#9a9993;--line:#34332f;
+--accent:#8db4dc;--accent-ink:#10202f;--ok:#6cc08b;--okbg:#1d3324;--warn:#f0c060;--warnbg:#3a2f15;--bad:#f08a7e;--badbg:#432421;--hl:#3a3220}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:flex;flex-direction:column}
+a{color:var(--accent)}
+.topbar{display:flex;align-items:center;gap:16px;padding:8px 16px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
+.brand{font-weight:700;text-decoration:none;color:var(--ink)}
+.brand small{font-weight:400;color:var(--muted);margin-left:6px}
+.topbar nav{display:flex;gap:4px;flex-wrap:wrap}
+.topbar nav a{padding:5px 10px;border-radius:6px;text-decoration:none;color:var(--ink);font-size:14px}
+.topbar nav a:hover{background:var(--bg)}.topbar nav a.on{background:var(--accent);color:var(--accent-ink)}
+.topbar .who{margin-left:auto;font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:center}
+.banner{padding:6px 16px;font-size:13px;border-bottom:1px solid var(--line)}
+.banner.free{background:var(--warnbg);color:var(--warn)}
+.banner.case{background:var(--okbg);color:var(--ok)}
+.page{padding:20px 16px 48px;max-width:1100px;width:100%;margin:0 auto}
+.full{flex:1;min-height:0;display:flex;flex-direction:column}
+h1{font-size:22px;margin:0 0 12px}h2{font-size:17px;margin:24px 0 8px}
+.muted{color:var(--muted)}.small{font-size:13px}.mono{font-family:var(--mono);font-size:12px;word-break:break-all}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:10px 0}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+.cards a.card{display:block;text-decoration:none;color:var(--ink);margin:0}.cards a.card:hover{border-color:var(--accent)}
+.cards a.card b{display:block;font-size:16px;margin-bottom:4px}
+table.t{border-collapse:collapse;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:14px}
+table.t th,table.t td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+table.t th{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);font-weight:600}
+table.t tr:last-child td{border-bottom:0}
+.pill{display:inline-block;font-size:12px;font-weight:600;padding:1px 9px;border-radius:99px;background:var(--bg);color:var(--muted);white-space:nowrap}
+.pill.ok{background:var(--okbg);color:var(--ok)}.pill.failed,.pill.bad{background:var(--badbg);color:var(--bad)}
+.pill.running,.pill.warn,.pill.interrupted{background:var(--warnbg);color:var(--warn)}
+.btn{display:inline-block;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;padding:5px 12px;font:inherit;font-size:14px;cursor:pointer;text-decoration:none}
+.btn:hover{border-color:var(--ink)}.btn:disabled{opacity:.45;cursor:default}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.sm{font-size:12px;padding:2px 8px}
+input[type=text],input[type=search],select{padding:6px 9px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);font:inherit;font-size:14px}
+.err{background:var(--badbg);color:var(--bad);border-radius:8px;padding:8px 12px;margin:10px 0}
+.note{background:var(--hl);border-radius:8px;padding:8px 12px;margin:10px 0;font-size:14px}
+.signin{max-width:420px;margin:10vh auto;padding:0 16px}
+.signin input{width:100%;margin:8px 0 12px;font-size:16px;padding:8px 10px}
+form.inline{display:inline}
+@media (max-width:640px){.topbar .who{margin-left:0;width:100%}}

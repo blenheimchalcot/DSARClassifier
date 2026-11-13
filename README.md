@@ -17,8 +17,8 @@ Local pipeline for GDPR / UK GDPR Data Subject Access Requests over Microsoft Pu
 - [docs/HANDOVER.md](docs/HANDOVER.md): handing the platform to another organisation: release pack and sign-off checklist.
 - [docs/COVERAGE.md](docs/COVERAGE.md): what each source gives and what needs a person.
 - [docs/REVIEWER_GUIDE.md](docs/REVIEWER_GUIDE.md): for HR and privacy reviewers deciding on items scored 7-10.
-- [docs/TOOLBOX.md](docs/TOOLBOX.md): stand-alone tools used during a case, starting with the redaction tool.
-- [docs/REVIEW_APP_PLAN.md](docs/REVIEW_APP_PLAN.md): plan for the local review web app that will replace the workbooks.
+- [docs/TOOLBOX.md](docs/TOOLBOX.md): the local web app (`dsar serve`) and its toolbox: mail viewer, Teams viewer, redaction.
+- [docs/REVIEW_APP_PLAN.md](docs/REVIEW_APP_PLAN.md): plan for the rest of the web app, which will replace the workbooks.
 - [docs/MOVING_LAPTOP.md](docs/MOVING_LAPTOP.md): operator-internal: moving our own setup and live cases to another laptop.
 - [CHANGELOG.md](CHANGELOG.md): what changed in each version.
 
@@ -59,6 +59,8 @@ dsar audit verify           # 9. check the audit log; record the head hash outsi
 ```
 
 `dsar audit show` lists recent runs and their status; `dsar audit note "..."` records an operator decision.
+
+`dsar serve` opens the case in the local web app: stage status from the audit log, and the toolbox (mail viewer, Teams viewer, redaction). See [docs/TOOLBOX.md](docs/TOOLBOX.md).
 
 Use `--config <path>` to run a case with its own config file.
 
