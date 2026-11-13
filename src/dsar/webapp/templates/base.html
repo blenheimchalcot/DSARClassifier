@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf" content="{{ csrf }}">
+<title>{% block title %}DSAR{% endblock %} · {{ settings.case_ref or "DSAR toolbox" }}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+{% block head %}{% endblock %}
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="{{ url_for('main.home') }}">{{ settings.case_ref or "DSAR" }}<small>dsar {{ version }}</small></a>
+  <nav>
+    <a href="{{ url_for('main.home') }}" class="{{ 'on' if request.endpoint == 'main.home' }}">Case</a>
+    <a href="{{ url_for('main.toolbox_index') }}" class="{{ 'on' if request.endpoint == 'main.toolbox_index' }}">Toolbox</a>
+    {% for t in tools %}
+    <a href="{{ url_for(t.endpoint) }}" class="{{ 'on' if request.blueprint == t.blueprint_name }}">{{ t.name }}</a>
+    {% endfor %}
+  </nav>
+  {% if reviewer %}
+  <div class="who">Signed in as <b>{{ reviewer }}</b>
+    <form class="inline" method="post" action="{{ url_for('main.signout') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn sm">Sign out</button></form>
+  </div>
+  {% endif %}
+</header>
+{% if settings.case_bound %}
+<div class="banner case">Case-bound{% if settings.subject_name %} · data subject <b>{{ settings.subject_name }}</b>{% endif %} · actions are recorded in the case audit log · nothing leaves this machine</div>
+{% else %}
+<div class="banner free"><b>Free-standing mode:</b> not tied to a case. Nothing is checked against a manifest or written to an audit log, and exports download to this browser. Don't use this mode for case work.</div>
+{% endif %}
+{% block body %}<main class="page">{% block content %}{% endblock %}</main>{% endblock %}
+{% block scripts %}{% endblock %}
+</body>
+</html>

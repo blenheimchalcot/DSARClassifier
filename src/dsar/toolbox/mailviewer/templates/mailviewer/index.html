@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Mail viewer{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('tool_mail.static', filename='mail.css') }}">{% endblock %}
+{% block body %}
+<div class="full" id="mailapp" data-case="{{ 1 if settings.case_bound else 0 }}">
+  <div class="mv-toolbar">
+    <div id="pick-case" class="mv-pick" hidden>
+      <select id="source-select" aria-label="Mailbox"></select>
+      <button id="open-btn" class="btn primary">Open</button>
+    </div>
+    <div id="pick-free" class="mv-pick" hidden>
+      <input type="text" id="path-input" placeholder="Full path to a .pst, .mbox or folder of .mbox files" spellcheck="false" autocomplete="off">
+      <button id="browse-btn" class="btn">Browse…</button>
+      <button id="add-btn" class="btn primary">Open</button>
+    </div>
+    <button id="xlsx-btn" class="btn" disabled>{{ "Save to case as Excel" if settings.case_bound else "Export to Excel" }}</button>
+    <span id="status" class="mv-status" role="status"></span>
+  </div>
+  <div class="mv-panes">
+    <aside class="mv-pane mv-folders">
+      <div class="mv-head">Folders</div>
+      <div id="folder-tree" class="mv-scroll"><p class="mv-hint">Open a mailbox to begin.</p></div>
+    </aside>
+    <section class="mv-pane mv-list">
+      <div class="mv-head"><span id="list-title">Messages</span>
+        <input type="search" id="search-input" placeholder="Search subject, sender, recipients" disabled></div>
+      <div id="message-list" class="mv-scroll"><p class="mv-hint">Choose a folder.</p></div>
+      <div id="pager" class="mv-pager" hidden>
+        <button id="prev-btn" class="btn sm">← Prev</button><span id="page-info"></span><button id="next-btn" class="btn sm">Next →</button>
+      </div>
+    </section>
+    <article class="mv-pane mv-detail">
+      <div class="mv-head">Message</div>
+      <div id="message-detail" class="mv-scroll"><p class="mv-hint">Choose a message to read it.</p></div>
+    </article>
+  </div>
+  <div id="busy" class="mv-busy" hidden><div class="mv-spin"></div><span id="busy-text">Loading…</span></div>
+</div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='toolbox.js') }}"></script>
+<script src="{{ url_for('tool_mail.static', filename='mail.js') }}"></script>{% endblock %}

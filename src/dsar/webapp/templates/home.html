@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Case{% endblock %}
+{% block content %}
+{% if not settings.case_bound %}
+  <h1>DSAR toolbox</h1>
+  <p class="muted">Running without a case. Start <code>dsar serve</code> with <code>DSAR_DATA_DIR</code> set for case work.</p>
+  <h2>Tools</h2>
+  {% include "_tool_cards.html" %}
+{% else %}
+  <h1>{{ settings.case_ref }}</h1>
+  <p class="muted small">Case data: <span class="mono">{{ settings.data_dir }}</span>{% if settings.config_path %} · config <span class="mono">{{ settings.config_path }}</span>{% endif %}</p>
+
+  {% if info.problems %}
+  <div class="err"><b>Audit log check:</b> {{ info.problems | join("; ") }}</div>
+  {% else %}
+  <p class="small">Audit log: {{ info.entries }} entries, hash chain intact. Head <span class="mono">{{ info.head[:16] }}…</span></p>
+  {% endif %}
+
+  {% if info.progress %}
+  <div class="note">Latest progress: <b>{{ info.progress.stage }}</b> {{ info.progress.done }}/{{ info.progress.total }} ({{ info.progress.percent }}%), updated {{ info.progress.updated_at }}{% if info.progress.eta_min %}, about {{ info.progress.eta_min }} min left{% endif %}</div>
+  {% endif %}
+
+  <h2>Pipeline</h2>
+  <table class="t">
+    <tr><th>Stage</th><th>Command</th><th>Status</th><th>Last run (UTC)</th><th>Notes</th></tr>
+    {% for s in info.stages %}
+    <tr>
+      <td>{{ s.label }}</td>
+      <td class="mono">dsar {{ s.command }}</td>
+      <td><span class="pill {{ s.status | replace(' ', '-') }}">{{ s.status }}</span>{% if s.runs > 1 %} <span class="muted small">×{{ s.runs }}</span>{% endif %}</td>
+      <td class="small">{{ s.when }}</td>
+      <td class="small">{{ s.detail }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted small">Status comes from the case audit log. Stages are run from the terminal for now (docs/OPERATIONS.md §2).</p>
+
+  <h2>Toolbox</h2>
+  {% include "_tool_cards.html" %}
+
+  <h2>Recent audit entries</h2>
+  <table class="t">
+    <tr><th>#</th><th>When (UTC)</th><th>Entry</th><th>Who</th></tr>
+    {% for e in info.recent %}
+    <tr><td>{{ e.seq }}</td><td class="small">{{ e.ts }}</td>
+      <td><span class="mono">{{ e.command }}</span> {{ e.event }}{% if e.data.status %} <span class="pill {{ e.data.status }}">{{ e.data.status }}</span>{% endif %}</td>
+      <td class="small">{{ e.data.reviewer or e.actor }}</td></tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">No entries yet.</td></tr>
+    {% endfor %}
+  </table>
+{% endif %}
+{% endblock %}

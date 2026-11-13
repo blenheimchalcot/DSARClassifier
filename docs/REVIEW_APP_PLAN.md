@@ -1,6 +1,6 @@
 # Plan: a local web app for reviewing and disclosing DSARs
 
-Status: **draft for discussion**, not started. The spreadsheet workflow (`dsar review export` / `import`) stays in use until the app reaches parity, and stays as a fallback afterwards.
+Status: **the shell is built**. `dsar serve` (Flask, see [TOOLBOX.md](TOOLBOX.md)) gives sign-in by name, the case page with stage status from the audit log, and the Toolbox (mail viewer, Teams viewer, redaction). Phase 0's item browser over `dsar.sqlite`, and everything after it, are still to do. The stack chosen is Flask with Jinja templates and plain JavaScript, not FastAPI and htmx (section 4), so the two tools from PSTViewer moved across almost unchanged. The spreadsheet workflow (`dsar review export` / `import`) stays in use until the app reaches parity, and stays as a fallback afterwards.
 
 ## 1. Why the spreadsheet isn't enough
 
@@ -61,7 +61,7 @@ How it runs: each **Run** button starts the same `dsar` CLI command as a backgro
 
 ## 3a. Toolbox
 
-The app has a **Toolbox** menu linking to the stand-alone tools in `src/dsar/toolbox/` ([TOOLBOX.md](TOOLBOX.md)). The first is the **redaction tool** (`dsar markup`), built and in use on a live case. From the app's item view, "Redact this document" opens the tool on that item. Once the app's own server exists, the tool's pages are mounted under `/toolbox/redaction/` with the same sign-in, rather than started as a separate server. Its event log and records are unchanged. Lessons from using it so far:
+The app has a **Toolbox** menu for the tools in `src/dsar/toolbox/` ([TOOLBOX.md](TOOLBOX.md)): the **mail viewer** and **Teams viewer** (from PSTViewer) and the **redaction tool** (`dsar markup`, in use on a live case). All are mounted under `/toolbox/<tool>/` with the same sign-in. The redaction tool's event log and records are unchanged. Still to do: from the app's item view, "Redact this document" should open the tool on that item, and "Open in mail viewer" should jump to the message. Lessons from using the redaction tool so far:
 
 - Approve and redact are the common tasks: keep them as the only primary buttons, with keyboard shortcuts and auto-advance. Rare actions (split, clear) go in a menu.
 - Fold decided items away, but keep them one click from review.

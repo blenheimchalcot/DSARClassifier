@@ -83,9 +83,12 @@ To withdraw individual classifications (for example failed evidence), use `dsar 
 - Recordings referenced in emails (call recorders, Teams) are often not in the export; ask for them.
 - `dsar report` writes every alias-matched chunk; on a big case that is over 1 GB. Reviewers use `results_scored.csv`.
 
-## 5a. Redacting documents for release
+## 5a. Web app, mailbox viewers and redaction
 
-Mark up documents element by element with the redaction tool (`dsar markup serve`), and export redacted copies from it: see [TOOLBOX.md](TOOLBOX.md). The redaction is a removal, not an overlay. Every decision is logged with the reviewer's name.
+`dsar serve` opens the case in the local web app (see [TOOLBOX.md](TOOLBOX.md)). Run it case-bound (the default) for case work: mailboxes open only from the input manifest after a hash check, everything saved goes read-only into `output/toolbox/` with its hash, and the audit log records who opened and exported what. `--free` mode writes no audit entries and must not be used for case work.
+
+- **Mail viewer / Teams viewer:** read a PST as the custodian saw it, save a message, attachment or Teams transcript (PDF) into the case for disclosure or for a reviewer, or export a mailbox to Excel.
+- **Redaction:** mark up documents element by element and export redacted copies. The redaction is a removal, not an overlay. Every decision is logged with the reviewer's name. `dsar markup serve` still runs the tool on its own.
 
 ## 6. Pre-commit PD scan
 
