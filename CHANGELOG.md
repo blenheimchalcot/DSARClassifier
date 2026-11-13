@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+### Added
+- **Toolbox** (`src/dsar/toolbox/`, [docs/TOOLBOX.md](docs/TOOLBOX.md)), with its first tool: **redaction**. `dsar markup serve FOLDER` is a local (127.0.0.1, token) web page to approve, redact all or redact part of each element (transcript turn or paragraph), split mis-attributed turns, and export a redacted copy with the text removed and a redaction log. Decisions are append-only, hash-chained and tied to each file's SHA-256 and span. `dsar markup score FOLDER` adds a 0-10 hint per element from the local model. "Export Personal Data extracts" writes the de-duplicated report text and a private extract register (sources) for the whole folder.
+- `dsar review export --outstanding` (undecided items only) and `--ids FILE` (chosen items, any score).
+- A **status** column in review workbooks (*To review* first, then *Done*).
+- [docs/REVIEW_APP_PLAN.md](docs/REVIEW_APP_PLAN.md): plan for a local review web app.
+
+### Fixed
+- Review workbooks opened in Excel with "We found a problem with some content". The rich-text evidence highlighting written by openpyxl is rejected by Excel, so the evidence is now marked with 【 】 in plain text.
+- Review export crashed on control characters in extracted text; they are now replaced with spaces.
+
 ## 0.2.0 (unreleased)
 
 Productionised for handover to other organisations (#9).

@@ -14,7 +14,8 @@ The workbook holds personal data. Keep it on the device it was given to you on, 
 
 ## What to look at in each row
 
-- **context**: the passage, with the classifier's evidence in **bold red**. Read the whole passage, not just the red text.
+- **status**: *To review* rows (listed first) still need your decision; *Done* rows were decided in an earlier workbook and are shown for reference. You can still change them.
+- **context**: the passage, with the classifier's evidence between 【 】 brackets. Read the whole passage, not just the bracketed text.
 - **evidence_found_in_source**: whether the quoted evidence really appears in the original. `yes` is normal. With `partial`, `no` or `missing`, the classifier may have invented or misquoted the evidence, so judge from the context only.
 - **date, from, to, subject, custodian, location**: where the passage came from, so you can find the original if you need to.
 

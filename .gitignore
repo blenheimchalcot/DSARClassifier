@@ -25,3 +25,4 @@ data/
 *.xlsx
 *.sha256
 *.log
+build/

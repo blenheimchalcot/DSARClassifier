@@ -751,8 +751,12 @@ def review_group() -> None:
 @click.option("--db-path", default=None, help="SQLite path. Defaults to $DSAR_DATA_DIR/dsar.sqlite.")
 @click.option("--min-score", type=click.IntRange(0, 10), default=7, show_default=True)
 @click.option("--out", "out_path", default=None, help="Defaults to $DSAR_DATA_DIR/output/review_<date>.xlsx.")
+@click.option("--outstanding", is_flag=True, help="Only items without a reviewer decision yet.")
+@click.option("--ids", "ids_file", type=click.Path(exists=True, dir_okay=False), default=None,
+              help="Only these chunk ids (one per line), at any score; MIN_SCORE is ignored.")
 @_audited("review export")
-def review_export_cmd(db_path: str | None, min_score: int, out_path: str | None, run: audit.Run) -> None:
+def review_export_cmd(db_path: str | None, min_score: int, out_path: str | None, outstanding: bool,
+                      ids_file: str | None, run: audit.Run) -> None:
     """Write the reviewer workbook: one row per item scored MIN_SCORE+, evidence highlighted in context."""
     from dsar import review
 
@@ -765,7 +769,11 @@ def review_export_cmd(db_path: str | None, min_score: int, out_path: str | None,
         raise click.ClickException(f"{out_path} exists; never overwritten (use --out)")
     with db.connect(db_path) as conn:
         db.init_schema(conn)
-        stats = review.export(conn, Path(out_path), min_score)
+        ids = None
+        if ids_file:
+            ids = {line.strip() for line in Path(ids_file).read_text().splitlines() if line.strip()}
+            min_score = 0
+        stats = review.export(conn, Path(out_path), min_score, outstanding, ids)
     click.echo(f"Wrote {stats['rows']} items {stats['by_score']} to {out_path}")
     if stats["prefilled"]:
         click.echo(f"  {stats['prefilled']} already decided (pre-filled from earlier imports)")
@@ -1218,6 +1226,71 @@ def audit_show(last: int) -> None:
     if unfinished:
         click.echo(f"  {len(unfinished)} run(s) with no end entry (still running, or killed): "
                    + ", ".join(sorted(unfinished)))
+
+
+@main.group(name="markup")
+def markup_group() -> None:
+    """Mark up documents for release: approve passages, redact text, export a redacted copy."""
+
+
+@markup_group.command(name="serve")
+@click.argument("folder", type=click.Path(exists=True, file_okay=False))
+@click.option("--reviewer", required=True, help="Your name, recorded with every mark.")
+@click.option("--subject", default="", help="Data subject's first name, to highlight their turns in transcripts.")
+@click.option("--port", type=int, default=0, help="Port on 127.0.0.1 (default: any free port).")
+@click.option("--no-browser", is_flag=True, help="Print the address instead of opening it.")
+@_audited("markup serve")
+def markup_serve_cmd(folder: str, reviewer: str, subject: str, port: int, no_browser: bool, run: audit.Run) -> None:
+    """Serve FOLDER's .txt files for markup on this machine only (127.0.0.1). Ctrl-C to stop."""
+    import webbrowser
+    from urllib.parse import quote
+
+    from dsar.toolbox.redaction import markup
+
+    server, url = markup.serve(Path(folder), reviewer, _data_dir() / "output", port)
+    if subject:
+        url += "&subject=" + quote(subject)
+    click.echo(f"Markup open at {url}\nMarks are saved to {Path(folder) / markup.EVENTS_NAME}. Ctrl-C to stop.")
+    if not no_browser:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+        events = Path(folder) / markup.EVENTS_NAME
+        if events.exists():
+            run.hash_file("markup_events", events)
+
+
+@markup_group.command(name="score")
+@click.argument("folder", type=click.Path(exists=True, file_okay=False))
+@click.option("--config", "config_path", default="config.yaml", show_default=True)
+@click.option("--system-prompt", default="claude_strict.md", show_default=True)
+@_audited("markup score")
+def markup_score_cmd(folder: str, config_path: str, system_prompt: str, run: audit.Run) -> None:
+    """Suggest a 0-10 score for every element in FOLDER with the local model (a hint, never a decision)."""
+    from dsar import classify
+    from dsar.toolbox.redaction import markup
+
+    cfg = load_config(config_path)
+    prompt = classify.load_system_prompt(system_prompt)
+    last = [0.0]
+
+    def progress(done: int, total: int) -> None:
+        if time.monotonic() - last[0] > 15 or done == total:
+            last[0] = time.monotonic()
+            click.echo(f"  {done}/{total} elements scored")
+
+    result = asyncio.run(markup.score_folder(
+        Path(folder), system_prompt=prompt, model=cfg.model.default, subject_name=cfg.subject.name,
+        max_tokens=cfg.model.max_tokens, temperature=cfg.model.temperature, concurrency=cfg.model.concurrency,
+        progress=progress))
+    run.data.update(result)
+    run.hash_file("markup_scores", Path(folder) / markup.SCORES_NAME)
+    click.echo(f"Scored {result['scored']} of {result['elements']} element(s); {result['failed']} failed; "
+               f"{result['already_scored']} already scored.")
 
 
 @audit_group.command(name="note")

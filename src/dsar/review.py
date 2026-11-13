@@ -22,6 +22,8 @@ from pathlib import Path
 from dsar import audit, db, evidence, report
 
 MIN_SCORE = 7
+STATUS_TO_REVIEW, STATUS_DONE = "To review", "Done"
+EVIDENCE_OPEN, EVIDENCE_CLOSE = "【", "】"
 CONTEXT_CHARS = 1500       # either side of the evidence
 CELL_LIMIT = 32000         # Excel's cell limit is 32,767
 
@@ -43,7 +45,7 @@ REASONS = [
     "Other (explain in notes)",
 ]
 
-MODEL_COLUMNS = ["review_id", "model_score", "model_reason", "evidence", "evidence_found_in_source", "context",
+MODEL_COLUMNS = ["review_id", "status", "model_score", "model_reason", "evidence", "evidence_found_in_source", "context",
                  "source_type", "date", "from", "to", "subject", "custodian", "location", "source_path", "item_ref"]
 REVIEW_COLUMNS = ["assessment", "adjusted_score", "decision", "reason", "notes", "reviewer", "review_date"]
 COLUMNS = MODEL_COLUMNS + REVIEW_COLUMNS
@@ -54,9 +56,10 @@ GUIDANCE = [
     "Each row is a passage the model scored 7 or more on the 0-10 scale: 6-7 specific personal information "
     "(address, date of birth, HR actions), 8-9 opinions about the person's behaviour or performance, 10 highly "
     "opinionated, derogatory or sensitive.",
-    "The 'context' column shows the passage with the model's evidence in bold red. 'evidence_found_in_source' "
+    "The 'context' column shows the passage with the model's evidence between 【 】 brackets. 'evidence_found_in_source' "
     "says whether that quote really appears in the document: yes / partial / no / missing. Treat anything but "
     "'yes' with care: the model can invent quotes.",
+    "The 'status' column says which rows still need your decision (To review, listed first) and which are Done.",
     "Fill in the yellow columns only:",
     "  assessment       Is the model's score right? Agree / Score too high / Score too low.",
     "  adjusted_score   Your score (0-10) if you disagree; leave blank if you agree.",
@@ -69,6 +72,13 @@ GUIDANCE = [
     "You can return a partly completed workbook; unreviewed rows stay outstanding.",
     "If you are unsure whether an exemption applies, choose 'Other (explain in notes)' and ask the DPO.",
 ]
+
+
+def _cell_safe(value):
+    """Excel can't store most control characters; swap each for a space so evidence positions still line up."""
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+
+    return ILLEGAL_CHARACTERS_RE.sub(" ", value) if isinstance(value, str) else value
 
 
 def _rows(conn: sqlite3.Connection, min_score: int) -> list[dict]:
@@ -133,27 +143,18 @@ def context_window(content: str, spans: list[tuple[int, int]]) -> tuple[str, lis
     return prefix + text + suffix, shifted
 
 
-def _rich(text: str, spans: list[tuple[int, int]]):
-    from openpyxl.cell.rich_text import CellRichText, TextBlock
-    from openpyxl.cell.text import InlineFont
-
-    if not spans:
-        return text
-    bold = InlineFont(b=True, color="C00000")
+def _marked(text: str, spans: list[tuple[int, int]]) -> str:
+    """Bracket each evidence span with 【 】. Plain text, because Excel rejects openpyxl's inline rich text as corrupt."""
     parts, pos = [], 0
     for a, b in spans:
         if a < pos:
             continue
-        if a > pos:
-            parts.append(text[pos:a])
-        parts.append(TextBlock(bold, text[a:b]))
+        parts += [text[pos:a], EVIDENCE_OPEN, text[a:b], EVIDENCE_CLOSE]
         pos = b
-    if pos < len(text):
-        parts.append(text[pos:])
-    return CellRichText(parts)
+    return "".join(parts) + text[pos:]
 
-
-def export(conn: sqlite3.Connection, out_path: Path, min_score: int = MIN_SCORE) -> dict:
+def export(conn: sqlite3.Connection, out_path: Path, min_score: int = MIN_SCORE, outstanding: bool = False,
+           ids: set[str] | None = None) -> dict:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.worksheet.datavalidation import DataValidation
@@ -161,20 +162,28 @@ def export(conn: sqlite3.Connection, out_path: Path, min_score: int = MIN_SCORE)
     rows = _rows(conn, min_score)
     # Rows already decided in an earlier import come pre-filled so the reviewer sees their work.
     decided = latest_decisions(conn)
+    if outstanding:
+        rows = [r for r in rows if r["review_id"] not in decided]
+    if ids is not None:
+        rows = [r for r in rows if r["review_id"] in ids]
+    # Items still to review first; the sort is stable, so each group keeps its score order.
+    rows.sort(key=lambda r: r["review_id"] in decided)
 
     wb = Workbook()
     ws = wb.active
     ws.title = "Review"
     ws.append(COLUMNS)
     for r in rows:
+        r = {k: _cell_safe(v) for k, v in r.items()}
         spans = evidence_spans(r["content"], r["evidence"])
         context, shifted = context_window(r["content"], spans)
         prior = decided.get(r["review_id"], {})
-        ws.append([r[c] for c in MODEL_COLUMNS[:5]] + [None] + [r[c] for c in MODEL_COLUMNS[6:]]
-                  + [prior.get(c) for c in REVIEW_COLUMNS])
-        ws.cell(ws.max_row, MODEL_COLUMNS.index("context") + 1).value = _rich(context, shifted)
+        r["status"] = STATUS_DONE if prior else STATUS_TO_REVIEW
+        ws.append([None if c == "context" else r[c] for c in MODEL_COLUMNS] + [prior.get(c) for c in REVIEW_COLUMNS])
+        ws.cell(ws.max_row, MODEL_COLUMNS.index("context") + 1).value = _marked(context, shifted)
 
     grey, yellow = PatternFill("solid", fgColor="DDDDDD"), PatternFill("solid", fgColor="FFF2CC")
+    green, orange = PatternFill("solid", fgColor="C6EFCE"), PatternFill("solid", fgColor="F8CBAD")
     for cell in ws[1]:
         cell.font = Font(bold=True)
         cell.fill = yellow if cell.value in REVIEW_COLUMNS else grey
@@ -184,7 +193,10 @@ def export(conn: sqlite3.Connection, out_path: Path, min_score: int = MIN_SCORE)
             cell.alignment = Alignment(wrap_text=True, vertical="top")
         for cell in row[len(MODEL_COLUMNS):]:
             cell.fill = yellow
-    widths = dict(review_id=18, model_score=7, model_reason=28, evidence=30, evidence_found_in_source=10,
+        status = row[MODEL_COLUMNS.index("status")]
+        status.font = Font(bold=True)
+        status.fill = green if status.value == STATUS_DONE else orange
+    widths = dict(review_id=18, status=12, model_score=7, model_reason=28, evidence=30, evidence_found_in_source=10,
                   context=80, source_type=12, date=12, subject=25, custodian=18, location=25, source_path=30,
                   assessment=14, adjusted_score=9, decision=22, reason=30, notes=35, reviewer=14, review_date=12)
     from openpyxl.utils import get_column_letter
@@ -225,7 +237,7 @@ def export(conn: sqlite3.Connection, out_path: Path, min_score: int = MIN_SCORE)
     summary = wb.create_sheet("Summary", 1)
     summary.append(["Score", "Items", "Decided", "Outstanding"])
     rng = f"Review!${col('decision')}$2:${col('decision')}${max(n, 2)}"
-    score_rng = f"Review!$B$2:$B${max(n, 2)}"
+    score_rng = f"Review!${col('model_score')}$2:${col('model_score')}${max(n, 2)}"
     for i, s in enumerate(range(min_score, 11), start=2):
         summary.append([s, f"=COUNTIF({score_rng},{s})", f"=COUNTIFS({score_rng},{s},{rng},\"<>\")",
                         f"=B{i}-C{i}"])
