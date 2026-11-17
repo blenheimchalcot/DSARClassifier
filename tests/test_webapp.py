@@ -298,3 +298,26 @@ def test_serve_logs_the_stop_in_a_case_switched_to(case, monkeypatch):
     assert last["command"] == "toolbox app case-close" and last["data"]["reason"] == "server stopped"
     end = audit.AuditLog(case / "output").entries()[-1]
     assert end["command"] == "serve" and end["event"] == "end" and end["data"]["closed_in_case"] == "DSAR-TEST-2"
+
+
+def test_sign_in_name_is_remembered_by_the_browser_and_only_prefilled(case):
+    s = webapp.Settings.for_case(case)
+    app, c = client_for(s, name=None)
+    page = c.get("/signin").get_data(as_text=True)
+    csrf = re.search(r'name="csrf" value="([^"]+)"', page).group(1)
+    r = c.post("/signin", data={"name": "Pat Reviewer", "remember": "1", "csrf": csrf})
+    assert "dsar_reviewer_name=" in r.headers["Set-Cookie"] and "SameSite=Strict" in r.headers["Set-Cookie"]
+    # A new server (new token, new session cookie) pre-fills the name but still needs the click.
+    s2 = webapp.Settings.for_case(case)
+    app2 = webapp.create_app(s2)
+    c2 = app2.test_client()
+    c2.set_cookie("dsar_reviewer_name", "Pat Reviewer")
+    c2.get(f"/?token={s2.token}")
+    assert "/signin" in c2.get("/").headers["Location"]
+    assert "Continue as Pat Reviewer" in c2.get("/signin").get_data(as_text=True)
+    page = c2.get("/signin").get_data(as_text=True)
+    csrf = re.search(r'name="csrf" value="([^"]+)"', page).group(1)
+    r = c2.post("/signin", data={"name": "Pat Reviewer", "csrf": csrf})          # box unticked: forget it
+    assert "dsar_reviewer_name=;" in r.headers["Set-Cookie"]
+    entry = audit.AuditLog(case / "output").entries()[-1]
+    assert entry["command"] == "toolbox app sign-in" and entry["data"]["reviewer"] == "Pat Reviewer"

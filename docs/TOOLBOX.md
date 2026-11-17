@@ -19,7 +19,7 @@ dsar serve --free                # free-standing: no case (see below)
 
 Options: `--config` (case config, if it isn't in the data dir), `--markup-folder DIR` (an extra folder for the redaction tool, repeatable), `--cases-root DIR` (where the Cases page looks; default: the folder holding this case), `--port`, `--no-browser`.
 
-The terminal prints a one-off address with a token. Open it, then **sign in with your full name**: it is recorded with everything you decide or export. `Ctrl-C` stops the server. Restarting it gives a new address, so close the old tab. Only this machine can connect, and pages from other sites can't use the session (strict same-site cookie, a CSRF check on every change, and only `127.0.0.1` / `localhost` accepted as the host). Request lines are not printed, because they carry search terms and file names.
+The terminal prints a one-off address with a token. Open it, then **sign in with your full name**: it is recorded with everything you decide or export. Tick **Remember my name on this browser** and the next sign-in, even after a restart, is pre-filled: one click on *Continue as <name>*. It is never signed in silently, so whoever is at the keyboard confirms who is recorded. Untick it to forget the name. `Ctrl-C` stops the server. Restarting it gives a new address, so close the old tab. Only this machine can connect, and pages from other sites can't use the session (strict same-site cookie, a CSRF check on every change, and only `127.0.0.1` / `localhost` accepted as the host). Request lines are not printed, because they carry search terms and file names.
 
 ### Two modes
 

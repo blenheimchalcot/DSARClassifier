@@ -4,6 +4,8 @@ from flask import Blueprint, abort, current_app, redirect, render_template, requ
 from dsar.webapp import case, cases, records
 
 bp = Blueprint("main", __name__)
+REMEMBER_COOKIE = "dsar_reviewer_name"     # not tied to one server, so it survives restarts (cookies ignore the port)
+REMEMBER_DAYS = 365
 
 
 @bp.route("/")
@@ -61,15 +63,24 @@ def signin():
     nxt = request.values.get("next") or url_for("main.home")
     if not nxt.startswith("/") or nxt.startswith("//"):
         nxt = url_for("main.home")
+    remembered = " ".join(request.cookies.get(REMEMBER_COOKIE, "").split())[:80]
     if request.method == "POST":
         name = " ".join(request.form.get("name", "").split())
+        remember = request.form.get("remember") == "1"
         if len(name) < 2:
             error = "Enter your full name. It is recorded with everything you do."
         else:
             session["name"] = name[:80]
-            records.log("app", "sign-in", {"remote": request.remote_addr})
-            return redirect(nxt)
-    return render_template("signin.html", error=error, next=nxt)
+            records.log("app", "sign-in", {"remote": request.remote_addr, "remembered_name": remember})
+            resp = redirect(nxt)
+            # Only pre-fills the sign-in box next time: the reviewer still confirms who they are.
+            if remember:
+                resp.set_cookie(REMEMBER_COOKIE, session["name"], max_age=REMEMBER_DAYS * 86400,
+                                httponly=True, samesite="Strict")
+            else:
+                resp.delete_cookie(REMEMBER_COOKIE)
+            return resp
+    return render_template("signin.html", error=error, next=nxt, remembered=remembered)
 
 
 @bp.route("/signout", methods=["POST"])

@@ -9,8 +9,10 @@
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="next" value="{{ next }}">
     <label for="name">Full name</label>
-    <input type="text" id="name" name="name" autocomplete="name" autofocus required>
-    <button class="btn primary">Continue</button>
+    <input type="text" id="name" name="name" autocomplete="name" value="{{ remembered }}" {{ "" if remembered else "autofocus" }} required>
+    <label class="small"><input type="checkbox" name="remember" value="1" {{ "checked" if remembered or not request.cookies }}> Remember my name on this browser</label>
+    <p><button class="btn primary" {{ "autofocus" if remembered }}>{{ "Continue as " ~ remembered if remembered else "Continue" }}</button></p>
+    {% if remembered %}<p class="muted small">Not {{ remembered }}? Type your own name; untick the box to stop this browser remembering one.</p>{% endif %}
   </form>
 </main>
 {% endblock %}
