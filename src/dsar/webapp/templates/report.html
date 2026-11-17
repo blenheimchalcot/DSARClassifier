@@ -43,6 +43,7 @@
     {% endfor %}
   </table>
   {% elif g.kind == "conflicts" %}
+  <p><a class="btn sm primary" href="{{ url_for('tool_redaction.index') }}">Review them side by side in the Personal Data Reviewer → Conflicts</a></p>
   <table class="t">
     <tr><th>Item</th><th>Contains text left out in</th></tr>
     {% for r in g.rows %}

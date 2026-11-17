@@ -91,8 +91,9 @@ def index():
                      "events": sum(1 for _ in f.events.lines()) if f.events.path.exists() else 0,
                      "sections": markup.section_counts(docs, markup.repeats_for(docs, sources))})
     live = [r for r in rows if not r["left_out"]]
+    n_conf = len(markup.conflicts([(fid, docs) for fid, (path, docs) in loaded.items() if str(path) not in skip]))
     total = {k: sum(r["sections"][k] for r in live) for k in ("review", "low", "repeats", "done")} if live else None
-    return render_template("redaction/index.html", rows=rows, total=total, error=request.args.get("error", ""))
+    return render_template("redaction/index.html", rows=rows, total=total, n_conf=n_conf, error=request.args.get("error", ""))
 
 
 @bp.route("/add", methods=["POST"])
@@ -193,7 +194,8 @@ def _all_folders(f: markup.Folder) -> dict:
                 doc["item"] = item
         out.append({"fid": fid, "label": _label(path), "docs": shown, "repeats": markup.repeats_for(docs, sources),
                     "chain_ok": markup.Folder(path, "", None).events.verify()})
-    return {"reviewer": f.reviewer, "folders": out, "chain_ok": all(x["chain_ok"] for x in out)}
+    return {"reviewer": f.reviewer, "folders": out, "chain_ok": all(x["chain_ok"] for x in out),
+            "conflicts": markup.conflicts([(fid, docs) for fid, _, docs in loaded])}
 
 
 def _item_scores(folder: Path, names: list[str]) -> list[dict | None]:

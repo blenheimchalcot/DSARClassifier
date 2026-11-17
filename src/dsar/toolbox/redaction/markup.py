@@ -455,6 +455,42 @@ def decided_segments(text: str, el: dict, dec: dict) -> list[dict]:
     return out
 
 
+CONFLICT_MIN_CHARS = 25
+
+
+def conflicts(folders: list[tuple[str, list[dict]]]) -> list[dict]:
+    """Extracted elements whose text contains a passage left out elsewhere (not as a duplicate).
+
+    folders: [(folder id, docs)]. Same rule as the Personal Data Report's hold-out, so the
+    reviewer sees exactly what the report is holding back.
+    """
+    left = []
+    for fid, docs in folders:
+        for d in docs:
+            for el in d["elements"]:
+                dec = d["decisions"].get(el["id"])
+                for r in (dec or {}).get("redactions", []):
+                    if r["reason"] in _DUP_REASONS:
+                        continue
+                    n = _norm(d["text"][r["start"]:r["end"]])
+                    if len(n) >= CONFLICT_MIN_CHARS:
+                        left.append({"fid": fid, "file": d["name"], "element": el["id"], "redaction": r["id"],
+                                     "reason": r["reason"], "norm": n})
+    out = []
+    for fid, docs in folders:
+        for d in docs:
+            for el in d["elements"]:
+                dec = d["decisions"].get(el["id"])
+                if not dec or dec["decision"] == "redact_full":
+                    continue
+                text = _norm(extract_text(d["text"], el, dec["redactions"]))
+                hit = next((x for x in left if (x["fid"], x["file"]) != (fid, d["name"]) and x["norm"] in text), None)
+                if hit:
+                    out.append({"a": {"fid": fid, "file": d["name"], "element": el["id"]},
+                                "b": {k: hit[k] for k in ("fid", "file", "element", "redaction", "reason")}})
+    return out
+
+
 def repeat_sources(folders: list[tuple[Path, list[dict]]]) -> dict[str, dict]:
     """What a repeat of each decided text should get, keyed by exact text ("=") and normalised text ("~").
 
@@ -783,7 +819,7 @@ main{padding:0 32px 64px;max-width:940px;width:100%}
 .why{font-size:11px;font-weight:600;color:var(--red);text-decoration:none;margin:0 4px;white-space:nowrap}
 .mark{background:var(--redbg);color:var(--red);text-decoration:line-through;cursor:pointer;border-radius:2px;outline:1px dashed var(--red)}
 .blk{background:#000;color:#fff;font-size:12px;padding:1px 6px;border-radius:2px;white-space:nowrap}
-.itemscore{background:var(--bg);border-left:3px solid var(--part,#c80);border-radius:6px;padding:8px 12px;margin:0 0 10px;font-size:14px}.itemscore .ev{font-size:12px;opacity:.75;margin-top:4px}.sect{display:flex;justify-content:space-between;align-items:center;width:100%;font-weight:600}.sect .cnt{font-weight:600;background:var(--bg);border-radius:99px;padding:0 8px;font-size:12px}.sect.on .cnt{color:var(--ink,#1d1d1b);background:#fff}.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0}.chip{border:1px solid var(--line);background:var(--panel);border-radius:99px;padding:2px 10px;font:inherit;font-size:12px;cursor:pointer}.chip.on{background:var(--accent,#2f5d8a);color:#fff;border-color:transparent}.chip.clear{opacity:.7}.filehead{margin:16px 0 6px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}.pair{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:start;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0;background:var(--panel)}.pair .ptxt{white-space:pre-wrap;font-size:14px;margin-top:4px}.pair .pbtn{display:flex;flex-direction:column;gap:6px;max-width:240px;font-size:13px}.pair .own{display:flex;flex-direction:column;gap:4px}.pair .own .btn{font-size:13px;padding:3px 8px}.el.pair{display:grid}.pair .ph{font-weight:600;font-size:13px;display:flex;gap:8px;align-items:center;margin-bottom:4px}.pair .side{padding:8px;border-radius:6px}.pair .side.now{background:var(--bg)}.pair .win{background:#d9f2e0;border-radius:2px}.pair .wout{text-decoration:line-through;color:var(--red,#b3261e);background:#fbe3e1}.pair .why{font-size:11px;color:var(--red,#b3261e);margin:0 4px}.pair .side.was{background:var(--okbg,#e6f4ea);border-left:3px solid var(--ok,#2e7d4f)}.form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;font-size:13px}.form.top{justify-content:flex-end;margin:8px 0 10px}.form.col{flex-direction:column;align-items:flex-end}.form .frow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end}.btn kbd{font:600 10px/1 var(--mono,monospace);border:1px solid currentColor;border-radius:3px;padding:1px 4px;margin-left:4px;opacity:.6}
+.itemscore{background:var(--bg);border-left:3px solid var(--part,#c80);border-radius:6px;padding:8px 12px;margin:0 0 10px;font-size:14px}.itemscore .ev{font-size:12px;opacity:.75;margin-top:4px}.sect{display:flex;justify-content:space-between;align-items:center;width:100%;font-weight:600}.sect .cnt{font-weight:600;background:var(--bg);border-radius:99px;padding:0 8px;font-size:12px}.sect.on .cnt{color:var(--ink,#1d1d1b);background:#fff}.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0}.chip{border:1px solid var(--line);background:var(--panel);border-radius:99px;padding:2px 10px;font:inherit;font-size:12px;cursor:pointer}.chip.on{background:var(--accent,#2f5d8a);color:#fff;border-color:transparent}.chip.clear{opacity:.7}.filehead{margin:16px 0 6px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}.pair{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:start;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0;background:var(--panel)}.pair .ptxt{white-space:pre-wrap;font-size:14px;margin-top:4px}.pair .pbtn{display:flex;flex-direction:column;gap:6px;max-width:240px;font-size:13px}.pair .own{display:flex;flex-direction:column;gap:4px}.pair .own .btn{font-size:13px;padding:3px 8px}.el.pair{display:grid}.pair .ph{font-weight:600;font-size:13px;display:flex;gap:8px;align-items:center;margin-bottom:4px}.pair .side{padding:8px;border-radius:6px}.pair .side.now{background:var(--bg)}.pair.conf .side.now{background:#fbe3e1;border-left:3px solid var(--red,#b3261e)}.pair .win{background:#d9f2e0;border-radius:2px}.pair .wout{text-decoration:line-through;color:var(--red,#b3261e);background:#fbe3e1}.pair .why{font-size:11px;color:var(--red,#b3261e);margin:0 4px}.pair .side.was{background:var(--okbg,#e6f4ea);border-left:3px solid var(--ok,#2e7d4f)}.form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;font-size:13px}.form.top{justify-content:flex-end;margin:8px 0 10px}.form.col{flex-direction:column;align-items:flex-end}.form .frow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end}.btn kbd{font:600 10px/1 var(--mono,monospace);border:1px solid currentColor;border-radius:3px;padding:1px 4px;margin-left:4px;opacity:.6}
 .form select,.form input{padding:4px 6px;font:inherit;font-size:13px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px}.form input{flex:1;min-width:140px}
 mark{background:#ffe066;color:#000}
 .prior{font-size:13px;background:var(--partbg);color:var(--part);border-radius:6px;padding:4px 10px;margin-top:6px}
@@ -811,14 +847,14 @@ details.more .menu button{display:block;width:100%;text-align:left;border:0;back
 const PAGE_FID=(location.pathname.match(/\/f\/([0-9a-f]+)\//)||[])[1]||"",TOKEN=new URLSearchParams(location.search).get("token")||(document.querySelector('meta[name="csrf"]')||{}).content,REASONS=__REASONS__,SUBJECT=(new URLSearchParams(location.search).get("subject")||"").toLowerCase();
 const COLOURS=["#2f5d8a","#2e7d4f","#8a4b9c","#b5651d","#1f7a8c"];
 const LABEL={release:"Extracted",redact_full:"Left out",redact_partial:"Extracted in part",pending:"Not reviewed"};
-let DOCS=[],cur=0,view="original",q="",edit=null,full=null,split=null,minScore=-1,focus=null,lastReason=REASONS[0],doneOpen=false,openRow=null,REP={},repOpen=false,lowOpen=false,MODE="review",DISMISS=new Set(),F={rs:new Set(),ls:new Set(),dd:new Set(),ir:new Set(),hw:new Set(),rr:"",sb:""};
+let DOCS=[],cur=0,view="original",q="",edit=null,full=null,split=null,minScore=-1,focus=null,lastReason=REASONS[0],doneOpen=false,openRow=null,REP={},CONF=[],repOpen=false,lowOpen=false,MODE="review",DISMISS=new Set(),F={rs:new Set(),ls:new Set(),dd:new Set(),ir:new Set(),hw:new Set(),rr:"",sb:""};
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const reasonOpts=()=>REASONS.map(x=>`<option>${esc(x)}</option>`).join("");
 function toast(m){const t=document.getElementById("toast");t.textContent=m;t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",3000)}
 function rk(d){return d.fid?d.fid+"/"+d.name:d.name}
 function fbase(d){return d&&d.fid&&d.fid!==PAGE_FID?"../"+d.fid+"/":""}
 async function load(keep){const j=await (await fetch("api/docs?all=1&token="+TOKEN)).json();
- if(j.folders){DOCS=[];REP={};for(const f of j.folders){for(const d of f.docs){d.fid=f.fid;d.folder=f.label;DOCS.push(d)}for(const n in f.repeats)REP[f.fid+"/"+n]=f.repeats[n]}}else{DOCS=j.docs;REP=j.repeats||{}}document.getElementById("who").innerHTML="Reviewer: <b>"+esc(j.reviewer)+"</b>"+(j.chain_ok?"":" · <span style='color:var(--red)'>event log chain broken</span>");if(!keep){cur=Math.max(0,DOCS.findIndex(d=>d.fid===PAGE_FID));const P=new URLSearchParams(location.search),F=P.get("file"),E=P.get("el"),S=P.get("section");if(S&&SECTIONS[S])MODE=S;if(F){let i=DOCS.findIndex(d=>d.name===F&&(!d.fid||d.fid===PAGE_FID));if(i<0)i=DOCS.findIndex(d=>d.name===F);if(i>=0){MODE="file";cur=i;if(E){openRow=E;focus=E}}}}nav();render();if(!keep&&openRow)setTimeout(()=>goTo(openRow),60);if(!focus){const d=DOCS[cur];focus=(d.elements.find(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[rk(d)]||{})[e.id])||{}).id;render()}}
+ if(j.folders){DOCS=[];REP={};for(const f of j.folders){for(const d of f.docs){d.fid=f.fid;d.folder=f.label;DOCS.push(d)}for(const n in f.repeats)REP[f.fid+"/"+n]=f.repeats[n]}CONF=j.conflicts||[]}else{DOCS=j.docs;REP=j.repeats||{};CONF=[]}document.getElementById("who").innerHTML="Reviewer: <b>"+esc(j.reviewer)+"</b>"+(j.chain_ok?"":" · <span style='color:var(--red)'>event log chain broken</span>");if(!keep){cur=Math.max(0,DOCS.findIndex(d=>d.fid===PAGE_FID));const P=new URLSearchParams(location.search),F=P.get("file"),E=P.get("el"),S=P.get("section");if(S&&SECTIONS[S])MODE=S;if(F){let i=DOCS.findIndex(d=>d.name===F&&(!d.fid||d.fid===PAGE_FID));if(i<0)i=DOCS.findIndex(d=>d.name===F);if(i>=0){MODE="file";cur=i;if(E){openRow=E;focus=E}}}}nav();render();if(!keep&&openRow)setTimeout(()=>goTo(openRow),60);if(!focus){const d=DOCS[cur];focus=(d.elements.find(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[rk(d)]||{})[e.id])||{}).id;render()}}
 async function act(body){Object.assign(body,{file:DOCS[cur].name,sha256:DOCS[cur].sha256});const r=await fetch(fbase(DOCS[cur])+"api/act",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify(body)});const j=await r.json();if(!r.ok){toast(j.error);return false}return true}
 function nav(){const f=document.getElementById("files");f.innerHTML="";const c=counts();
  for(const k in SECTIONS){const b=document.createElement("button");b.className="sect"+(MODE===k?" on":"");b.innerHTML=`${SECTIONS[k]}<span class="cnt">${c[k]}</span>`;b.onclick=()=>{MODE=k;q="";openRow=null;edit=null;full=null;split=null;focus=null;render();scrollTo(0,0)};f.appendChild(b)}
@@ -925,14 +961,40 @@ function undecidedKey(k){const [fi,id]=splitKey(k);return !DOCS[fi].decisions[id
 // ---- Section views: every file of the folder at once -------------------------------------------
 // review: undecided, scored 7+ (or not yet scored) | low: undecided, scored below 7
 // repeats: undecided, same text as a decided element | done: every decided element
-const SECTIONS={review:"To review (7+)",low:"6 and below",repeats:"Repeats",done:"Reviewed"};
+const SECTIONS={review:"To review (7+)",low:"6 and below",repeats:"Repeats",conflicts:"Conflicts",done:"Reviewed"};
+const DUP="Duplicate – already in the Personal Data Report";
+function di(fid,file){return DOCS.findIndex(d=>(d.fid||"")===(fid||"")&&d.name===file)}
 function sc(el){const s=el.score;return s&&s.score!=null?s.score:null}
 function pool(kind){const out=[];DOCS.forEach((d,fi)=>{const R=REP[rk(d)]||{};d.elements.forEach(el=>{if(el.blank&&!d.decisions[el.id])return;
  const dec=d.decisions[el.id],rep=!dec&&R[el.id]&&!DISMISS.has(fi+"|"+el.id);
  const k=dec?"done":rep?"repeats":el.below?"low":"review";if(k===kind)out.push({d,fi,el,dec,rep:rep?R[el.id]:null})})});return out}
-function counts(){const c={};for(const k in SECTIONS)c[k]=pool(k).length;return c}
+function counts(){const c={};for(const k in SECTIONS)c[k]=k==="conflicts"?CONF.length:pool(k).length;return c}
 function chipRow(name,values,sel,label){return `<div class="chips"><span class="t">${label}</span>${values.map(v=>`<button class="chip ${sel.has(String(v))?"on":""}" data-chip="${name}" data-v="${v}">${v==="none"?"not scored":v}</button>`).join("")}<button class="chip clear" data-chip="${name}" data-v="*">all</button></div>`}
-function renderSection(){const m=document.getElementById("main"),who=[];
+function renderConflicts(m){
+ let h=`<div class="bar"><b style="font-size:16px">Conflicts</b><span class="t">the same text extracted in one place and left out in another; the report holds these back until you choose</span></div>`;
+ if(!CONF.length)h+=`<p class="alldone">No conflicts: nothing is held back.</p>`;
+ CONF.forEach((c,i)=>{const ai=di(c.a.fid,c.a.file),bi=di(c.b.fid,c.b.file);if(ai<0||bi<0)return;const A=DOCS[ai],B=DOCS[bi];
+  const ea=A.elements.find(e=>e.id===c.a.element),eb=B.elements.find(e=>e.id===c.b.element);if(!ea||!eb)return;const da=A.decisions[ea.id],db=B.decisions[eb.id];
+  const lab=d=>`${d.folder?esc(d.folder)+" › ":""}${esc(d.name.replace(/\.txt$/,"").replace(/_/g," "))}`;
+  h+=`<div class="pair conf" data-ci="${i}">
+   <div class="side was"><div class="ph">Extracted here ${ea.score&&ea.score.score!=null?`<span class="sc hi">Model ${ea.score.score}</span>`:""}</div><div class="t">${lab(A)} · ${esc(ea.label)} · <span class="badge ${da.decision}">${LABEL[da.decision]}</span></div><div class="ptxt">${ea.parts.map(([a,b])=>piece(A,a,b,da.redactions,"rel",false)).join(" ")}</div></div>
+   <div class="side now"><div class="ph">Left out here ${eb.score&&eb.score.score!=null?`<span class="sc">Model ${eb.score.score}</span>`:""}</div><div class="t">${lab(B)} · ${esc(eb.label)} · <span class="badge ${db.decision}">${LABEL[db.decision]}</span> “${esc(c.b.reason)}”</div><div class="ptxt">${eb.parts.map(([a,b])=>piece(B,a,b,db.redactions,"",false)).join(" ")}</div></div>
+   <div class="pbtn"><button class="btn go" data-cf="dup">Left-out copy is a duplicate</button><div class="t">changes its reason to “Duplicate – already in the Personal Data Report”; the extract goes in</div>
+    <button class="btn stop" data-cf="same">Leave it out here too</button><div class="t">the extracted copy is left out (“${esc(c.b.reason)}”)</div>
+    <button class="btn" data-cf="openA">Open extracted copy</button><button class="btn" data-cf="openB">Open left-out copy</button></div></div>`});
+ m.innerHTML=h;
+ m.querySelectorAll("[data-cf]").forEach(b=>b.onclick=async()=>{const c=CONF[+b.closest(".pair").dataset.ci],k=b.dataset.cf;
+  const ai=di(c.a.fid,c.a.file),bi=di(c.b.fid,c.b.file);
+  if(k==="openA"||k==="openB"){const x=k==="openA"?c.a:c.b,i=k==="openA"?ai:bi;MODE="file";cur=i;openRow=x.element;focus=x.element;nav();render();setTimeout(()=>goTo(x.element),60);return}
+  b.disabled=true;
+  if(k==="dup"){cur=bi;const dec=DOCS[bi].decisions[c.b.element],note=`Was “${c.b.reason}”: the same text is extracted in ${c.a.file}`;
+   const ok=dec.decision==="redact_full"?await act({action:"decide",element:c.b.element,decision:"redact_full",reason:DUP,note})
+    :await act({action:"decide",element:c.b.element,decision:"redact_partial",redactions:dec.redactions.map(r=>({start:r.start,end:r.end,reason:r.id===c.b.redaction?DUP:r.reason,note:r.id===c.b.redaction?note:(r.note||"")}))});
+   if(ok)toast("Recorded: the left-out copy is a duplicate")}
+  else{cur=ai;if(await act({action:"decide",element:c.a.element,decision:"redact_full",reason:c.b.reason,note:`Left out to match ${c.b.file}`}))toast("Recorded: left out here too")}
+  await load(true);nav()});
+ wire(m);nav()}
+function renderSection(){const m=document.getElementById("main"),who=[];if(MODE==="conflicts")return renderConflicts(m);
  let items=pool(MODE);
  let h=`<div class="bar"><b style="font-size:16px">${SECTIONS[MODE]}</b><span class="t">across ${DOCS.length} file(s) in ${new Set(DOCS.map(d=>d.fid||"")).size} folder(s)</span><input type="search" id="q" placeholder="Search…" value="${esc(q)}"></div>`;
  const qq=q.toLowerCase(),txt=x=>x.el.parts.map(([a,b])=>x.d.text.slice(a,b)).join(" ");
