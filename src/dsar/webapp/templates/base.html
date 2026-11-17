@@ -28,7 +28,7 @@
   {% endif %}
 </header>
 {% if settings.case_bound %}
-<div class="banner case">Case-bound{% if settings.subject_name %} · data subject <b>{{ settings.subject_name }}</b>{% endif %} · actions are recorded in the case audit log · nothing leaves this machine</div>
+<div class="banner case">Case-bound{% if subject_name %} · data subject <b>{{ subject_name }}</b>{% endif %} · actions are recorded in the case audit log · nothing leaves this machine</div>
 {% else %}
 <div class="banner free"><b>Free-standing mode:</b> not tied to a case. Nothing is checked against a manifest or written to an audit log, and exports download to this browser. Don't use this mode for case work.</div>
 {% endif %}

@@ -252,15 +252,13 @@ def test_report_from_a_deeper_search_goes_to_the_main_case(case, family_case):
     s = webapp.Settings.for_case(case)
     assert s.parent_ref == "DSAR-TEST-0"
     app, c = client_for(s)
-    assert "deeper search under" in c.get("/report/").get_data(as_text=True)
+    assert "in its deeper search <b>DSAR-TEST-1</b>" in c.get("/report/").get_data(as_text=True)
     j = c.post("/report/build", headers={"X-CSRF": c.csrf}).get_json()
     assert j["success"] and j["report"].startswith("Personal_Data_Report_DSAR-TEST-0_")
     assert (family_case / "output" / personal_data_report.OUT_DIR / j["report"]).is_file()
     for out in (family_case / "output", case / "output"):
         assert audit.AuditLog(out).entries()[-1]["command"] == "report personal-data"
-    # In the main case, Review and Report point to the deeper search.
     app, c = client_for(webapp.Settings.for_case(family_case))
-    assert "reviewed in DSAR-TEST-1" in c.get("/review/").get_data(as_text=True)
     page = c.get("/cases/").get_data(as_text=True)
     assert page.index("DSAR-TEST-0") < page.index("DSAR-TEST-1") and "main case" in page
 
@@ -312,3 +310,36 @@ def test_release_documents_are_checked_against_the_templates(case, family_case, 
     assert {e["name"]: e["present"] for e in d["enclosures"]} == {"Exemptions Report": True, "Data not in Scope": True,
                                                                   "Privacy Policy v1": False}
     assert not d["ready"]
+
+
+def test_everything_is_worked_from_the_main_case(case, family_case):
+    """From the main case: Review, Report and the Personal Data Reviewer use the deeper search's data."""
+    from dsar.toolbox.redaction import web
+
+    folder = case / "output" / "deep_dive"
+    folder.mkdir()
+    (folder / "01_note.txt").write_text("Sam Sample starts on Monday.\n")
+    s = webapp.Settings.for_case(family_case)
+    assert s.subject_name == ""                                   # the main case has no config of its own
+    app, c = client_for(s)
+    page = c.get("/review/").get_data(as_text=True)
+    assert "Address change" in page and "deeper search <b>DSAR-TEST-1</b>" in page
+    assert "data subject <b>Sam Sample</b>" in page
+    a = TEXT_A.index("Sam Sample's"), TEXT_A.index("Road.") + 5
+    assert _decide(c, "a", {"decision": disclosure.EXTRACT,
+                            "spans": [{"kind": "extract", "start": a[0], "end": a[1]}]}).status_code == 200
+    with db.connect(case / "dsar.sqlite") as conn:                 # saved in the deeper search's database
+        assert disclosure.latest(conn)["a"]["decision"] == disclosure.EXTRACT
+    assert not (family_case / "dsar.sqlite").exists()
+    for out in (family_case / "output", case / "output"):
+        e = audit.AuditLog(out).entries()[-1]
+        assert e["command"] == "review decide" and e["data"]["request"] == "DSAR-TEST-0"
+    with app.test_request_context():
+        labels = {web._label(p) for p in web.folders().values()}
+    assert labels == {"DSAR-TEST-1 › deep_dive"}
+    assert "DSAR-TEST-1 › deep_dive" in c.get("/toolbox/redaction/").get_data(as_text=True)
+    j = c.post("/report/build", headers={"X-CSRF": c.csrf}).get_json()
+    assert j["success"] and j["extracts"] == 1 and j["report"].startswith("Personal_Data_Report_DSAR-TEST-0_")  # folder not yet decided
+    assert (family_case / "output" / personal_data_report.OUT_DIR / j["report"]).is_file()
+    home = c.get("/").get_data(as_text=True)
+    assert "Release of DSAR-TEST-0" in home and 'href="/review/' in home

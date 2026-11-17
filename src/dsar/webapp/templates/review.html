@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Review{% endblock %}
 {% block content %}
-<h1>Review</h1>
+<h1>Review{% if fam.main_ref != settings.case_ref %} · {{ fam.main_ref }}{% endif %}</h1>
+{% if fam.split %}<p class="note small">Request <b>{{ fam.main_ref }}</b>: items from its deeper search <b>{{ fam.review_ref }}</b>, which holds every item from both searches. Decisions are saved there and logged in both cases.</p>{% endif %}
 <p class="muted small">Items the model scored {{ min_score }} or more, plus any item already decided. Decisions are saved as you make them, under your name, and never change the model's score. Decisions imported from review workbooks count as made.</p>
 <form class="filters" method="get">
   {% for st in statuses %}

@@ -20,10 +20,10 @@
     <tr><th></th><th>From the case</th><th>Now</th></tr>
     {% for r in rel.computed %}
     <tr><td>{{ "✅" if r.done else "⬜" }}</td><td>{{ r.label }}</td>
-      <td class="small">{% if r.link and fam.review_ref == settings.case_ref %}<a href="{{ url_for('review.queue') if r.link == 'review' else url_for('review.report_page') }}">{{ r.detail }}</a>{% else %}{{ r.detail }}{% endif %}</td></tr>
+      <td class="small">{% if r.link %}<a href="{{ url_for('review.queue') if r.link == 'review' else url_for('review.report_page') }}">{{ r.detail }}</a>{% else %}{{ r.detail }}{% endif %}</td></tr>
     {% endfor %}
   </table>
-  {% if fam.review_ref != settings.case_ref %}<p class="muted small">Worked out from {{ fam.review_ref }}, where this request is reviewed.</p>{% endif %}
+  {% if fam.split %}<p class="muted small">From {{ fam.review_ref }}'s data, which Review, Report and the Personal Data Reviewer use from here.</p>{% endif %}
   <h3>Release documents</h3>
   {% set d = rel.documents %}
   {% if not d.configured %}<div class="note">Set <span class="mono">DSAR_CASE_DOCS_ROOT</span> in <span class="mono">.env</span> to the folder holding each case's documents (for example your OneDrive DSAR folder) to check the prepared letter and reports.</div>

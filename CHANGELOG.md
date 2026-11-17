@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 (unreleased)
+
+### Changed
+- A request is worked entirely from its **main case**. Review, Report and the Personal Data Reviewer use the deeper search's database and folders directly, with no switching. Every change is logged in the main case and in the case holding the data. `dsar personal-data-report` works from the main case too.
+
 ## 0.3.0 (2026-11-17)
 
 ### Upgrading from an earlier pull of main

@@ -5,9 +5,12 @@ Review queue and Personal Data Report pages (case-bound only).
 /review/item/<id>   the whole item, evidence highlighted; decide, select passages
 /report/            what the Personal Data Report holds now, what's outstanding; build it
 
-Decisions go to dsar.sqlite (dsar.disclosure, append-only) and each one to the
-case audit log (`review decide`) under the signed-in reviewer. Building the
-report is logged by dsar.personal_data_report (`report personal-data`).
+They work on the request's review data (webapp.cases.Family): from the main case,
+a deeper search's database and folders are used directly, with no switching.
+Decisions go to that dsar.sqlite (dsar.disclosure, append-only) and each one to the
+audit logs of the current case, the main case and the case holding the data
+(`review decide`), under the signed-in reviewer. Building the report is logged by
+dsar.personal_data_report (`report personal-data`) in the main case and the data's.
 """
 import sqlite3
 from contextlib import contextmanager
@@ -28,13 +31,17 @@ def _settings():
     return s
 
 
+def _family():
+    return cases.family(_settings())
+
+
 @contextmanager
 def _conn():
-    s = _settings()
-    path = s.data_dir / "dsar.sqlite"
+    fam = _family()
+    path = fam.review_dir / "dsar.sqlite"
     if not path.is_file():
         # Never create a database in a case that doesn't have one.
-        abort(404, description=f"No dsar.sqlite in {s.data_dir}")
+        abort(404, description=f"No dsar.sqlite in {fam.review_dir}")
     with db.connect(path) as conn:
         db.init_schema(conn)
         yield conn
@@ -45,20 +52,9 @@ def _redaction_folders() -> dict[str, Path]:
     return web.folders()
 
 
-def _elsewhere():
-    """In a main case reviewed in one of its searches, the page that says where to go."""
-    s = _settings()
-    fam = cases.family(s)
-    if fam.review_dir.resolve() != s.data_dir.resolve():
-        return render_template("review_elsewhere.html", fam=fam)
-    return None
-
-
 @bp.route("/review/")
 def queue():
-    _settings()
-    if (page := _elsewhere()) is not None:
-        return page
+    fam = _family()
     status = request.args.get("status", disclosure.TO_REVIEW)
     if status not in ("", disclosure.TO_REVIEW, disclosure.NEEDS_PASSAGES, disclosure.DONE):
         status = disclosure.TO_REVIEW
@@ -69,7 +65,7 @@ def queue():
     q = request.args.get("q", "")
     with _conn() as conn:
         data = disclosure.queue(conn, min_score, status, q)
-    return render_template("review.html", data=data, status=status, min_score=min_score, q=q,
+    return render_template("review.html", data=data, status=status, min_score=min_score, q=q, fam=fam,
                            statuses=[disclosure.TO_REVIEW, disclosure.NEEDS_PASSAGES, disclosure.DONE])
 
 
@@ -79,7 +75,7 @@ def item(chunk_id):
         it = disclosure.item(conn, chunk_id)
     if it is None:
         abort(404)
-    return render_template("review_item.html", it=it, decisions=disclosure.DECISIONS, reasons=disclosure.REASONS,
+    return render_template("review_item.html", it=it, fam=_family(), decisions=disclosure.DECISIONS, reasons=disclosure.REASONS,
                            assessments=disclosure.ASSESSMENTS, EXTRACT=disclosure.EXTRACT,
                            RELEASE_REDACTED=disclosure.RELEASE_REDACTED, WITHHOLD=disclosure.WITHHOLD)
 
@@ -95,7 +91,11 @@ def decide(chunk_id):
             return jsonify({"success": False, "error": str(exc)}), 400
         nxt = [r["chunk_id"] for r in disclosure.queue(conn, status=disclosure.TO_REVIEW)["rows"]
                if r["chunk_id"] != chunk_id]
-    audit.AuditLog(s.output_dir).append("review", "review decide", {"reviewer": records.reviewer(), **result})
+    fam = cases.family(s)
+    for out in fam.logs(s.output_dir):
+        audit.AuditLog(out).append("review", "review decide",
+                                   {"reviewer": records.reviewer(), "request": fam.main_ref, "data_case": fam.review_ref,
+                                    **result})
     return jsonify({"success": True, **result,
                     "next": url_for("review.item", chunk_id=nxt[0]) if nxt else url_for("review.queue")})
 
@@ -103,10 +103,8 @@ def decide(chunk_id):
 @bp.route("/report/")
 def report_page():
     s = _settings()
-    if (page := _elsewhere()) is not None:
-        return page
     fam = cases.family(s)
-    template = personal_data_report.template_path(s.data_dir, fam.main_dir)
+    template = personal_data_report.template_path(fam.review_dir, fam.main_dir)
     with _conn() as conn:
         data = personal_data_report.assemble(conn, _redaction_folders())
     return render_template("report.html", data=data, template=template, template_ok=template.is_file(), fam=fam,
@@ -119,7 +117,7 @@ def report_build():
     with _conn() as conn:
         fam = cases.family(s)
         try:
-            result = personal_data_report.build(conn, s.output_dir, fam.main_ref, s.subject_name,
+            result = personal_data_report.build(conn, fam.review_output, fam.main_ref, fam.subject_name,
                                                 _redaction_folders(), records.reviewer(),
                                                 report_output_dir=fam.main_dir / "output")
         except (FileNotFoundError, ValueError) as exc:
@@ -140,7 +138,9 @@ def report_folder():
                                                         request.form.get("reason", ""), records.reviewer())
         except ValueError as exc:
             return redirect(url_for("review.report_page", error=str(exc)))
-    audit.AuditLog(s.output_dir).append("report", "report folder", result)
+    fam = cases.family(s)
+    for out in fam.logs(s.output_dir):
+        audit.AuditLog(out).append("report", "report folder", {**result, "request": fam.main_ref})
     return redirect(url_for("review.report_page"))
 
 

@@ -39,19 +39,42 @@ def case_folders(output_dir: Path) -> dict[str, Path]:
     return {_fid(p): p for p in found}
 
 
+def _outputs() -> list[Path]:
+    """Case output folders to look in: this case's and, for a request with a deeper search, the review data's."""
+    s = current_app.config["DSAR"]
+    if not s.case_bound:
+        return []
+    from dsar.webapp import cases
+    fam = cases.family(s)
+    return [s.output_dir] + ([fam.review_output] if fam.review_output.resolve() != s.output_dir.resolve() else [])
+
+
 def folders() -> dict[str, Path]:
     s = current_app.config["DSAR"]
-    found = list(case_folders(s.output_dir).values()) if s.case_bound else []
+    found = [p for out in _outputs() for p in case_folders(out).values()]
     found += [Path(p) for p in s.markup_folders] + list(_added.values())
     return {_fid(p): p for p in found}
+
+
+def _owner(path: Path) -> Path | None:
+    """The case output folder a folder belongs to: its exports are logged there."""
+    return next((out for out in _outputs() if path.is_relative_to(out)), None)
+
+
+def _label(path: Path) -> str:
+    s = current_app.config["DSAR"]
+    out = _owner(path)
+    if out is None:
+        return str(path)
+    rel = str(path.relative_to(out))
+    return rel if out == s.output_dir else f"{out.parent.parent.name} › {rel}"
 
 
 def _folder(fid: str) -> markup.Folder:
     path = folders().get(fid)
     if path is None:
         abort(404)
-    s = current_app.config["DSAR"]
-    return markup.Folder(path, records.reviewer(), s.output_dir if s.case_bound else None)
+    return markup.Folder(path, records.reviewer(), _owner(path))
 
 
 @bp.route("/")
@@ -60,7 +83,7 @@ def index():
     rows = []
     for fid, path in folders().items():
         f = markup.Folder(path, "", None)
-        label = str(path.relative_to(s.output_dir)) if s.case_bound and path.is_relative_to(s.output_dir) else str(path)
+        label = _label(path)
         rows.append({"id": fid, "label": label, "files": len(f.files()),
                      "events": sum(1 for _ in f.events.lines()) if f.events.path.exists() else 0})
     return render_template("redaction/index.html", rows=rows, error=request.args.get("error", ""))
@@ -82,10 +105,18 @@ def add():
 def page(fid):
     f = _folder(fid)
     s = current_app.config["DSAR"]
-    records.log(TOOL, "open", {"folder": str(f.folder), "files": len(f.files()),
-                               "events_sha256": audit.sha256_file(f.events.path) if f.events.path.exists() else None})
-    if "subject" not in request.args and s.subject_name:
-        return redirect(url_for(".page", fid=fid, subject=s.subject_name.split()[0]))
+    data = {"folder": str(f.folder), "files": len(f.files()),
+            "events_sha256": audit.sha256_file(f.events.path) if f.events.path.exists() else None}
+    records.log(TOOL, "open", data)
+    owner = _owner(f.folder)
+    if owner is not None and owner != s.output_dir:
+        audit.AuditLog(owner).append("toolbox", f"toolbox {TOOL} open", {"reviewer": records.reviewer(), **data})
+    subject = s.subject_name
+    if s.case_bound and not subject:
+        from dsar.webapp import cases
+        subject = cases.family(s).subject_name
+    if "subject" not in request.args and subject:
+        return redirect(url_for(".page", fid=fid, subject=subject.split()[0]))
     from flask import session
     head = f'<head><meta name="csrf" content="{html.escape(session.get("csrf", ""))}">'
     bar = (f'<body><div style="padding:6px 16px;font:13px -apple-system,sans-serif;border-bottom:1px solid #8884">'
