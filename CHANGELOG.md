@@ -2,6 +2,12 @@
 
 ## 0.3.0 (unreleased)
 
+### Upgrading from an earlier pull of main
+- `git pull`, then `pip install -r requirements.lock && pip install -e . --no-deps` and `python -m pytest -q`. No new packages since the web app (#19).
+- No action needed on case databases: the new tables (`decisions`, `decision_spans`, `report_folder_choices`) are created, empty, the first time Review or Report is opened. Existing workbook decisions are read as they are.
+- Put your organisation's `Personal Data Report.docx` in `Templates/` or point `DSAR_TEMPLATES_DIR` at it (see `.env.example`); it is not in git. Optionally set `DSAR_CASE_DOCS_ROOT` for the release checklist's document check.
+- A case that is a deeper search under another needs `data/case.json` (docs/TOOLBOX.md); standalone cases need nothing.
+
 ### Added
 - **Main case and deeper searches** (`data/case.json`), and a **release checklist** on the case page: deadline from the date received, what the case still needs (review, passages, Personal Data Reviewer folders, final report), the release documents checked against the templates (missing / unchanged / to complete / ready, plus the letter's enclosures), and confirmations logged in the main case. The redaction tool is now called the **Personal Data Reviewer**.
 - **Review queue and Personal Data Report in the web app** (`dsar.disclosure`, `dsar.personal_data_report`, [docs/TOOLBOX.md](docs/TOOLBOX.md)). Review replaces the workbook: items scored 7+ with the whole text, evidence highlighted and checked, and decisions in five terms (extract, release, release with redactions, withhold, not the subject's data). Passages to extract or redact are selected in the text and tied to its SHA-256. Decisions are validated on entry, append-only in `decisions` / `decision_spans`, and each one is audit-logged. Workbook decisions carry over. Report fills the controller's `Personal Data Report.docx` template with the extracted text from Review and the redaction tool (each piece once, oldest first), plus a private source register, both read-only and hashed; DRAFT while anything is outstanding.
