@@ -59,12 +59,13 @@ Workbook decisions (`dsar review import`) keep their wording and count as made. 
 
 The Report page shows what the report holds now, what is outstanding, a preview of every extract with its sources, and earlier builds. **Build report** fills a copy of the controller's template:
 
-- Template: `Personal Data Report.docx` in `Templates/` in the project folder, or the folder in `DSAR_TEMPLATES_DIR`. Its intro is kept, the *INSERT DATA REPORT* guidance and *SAMPLE TABLE* label are removed, and the sample table becomes *Data Subject* (from the case config) then one *Extracted data N* row per extract.
+- Template: `Personal Data Report.docx` from the case's own `data/templates/` folder if there is one (a copy tailored for the case), else from `Templates/` in the project folder or `DSAR_TEMPLATES_DIR`. The intro is kept and the *INSERT DATA REPORT* guidance and *SAMPLE TABLE* label are removed. The generic template's sample table becomes *Data Subject* then one *Extracted data N* row per extract. A tailored template keeps every row as written. The extracts go in *Extract N* rows after the row whose label mentions extracts or "mention you", and that row's `[placeholder]` is replaced with a pointer to them. Any other `[placeholder]` left in the template keeps the build a DRAFT until it is completed in Word.
+- Redaction folders: every folder under `output/` with `.txt` files counts, unless it is left out on the Report page. Leaving one out needs a reason and is logged (`report folder`) with your name. The page notes a folder whose files are all exact copies of files in another folder.
 - Contents: passages extracted in Review, workbook *Disclose* passages, and every passage released in the redaction tool's folders. Text only. Identical extracts are merged, so each piece of data appears once. Ordered by the source's date (an item's sent date, or a `YYYY-MM-DD` in a redaction file's name), undated last.
 - Outstanding (makes the build a **DRAFT**, in the file name and in red on the first page): items 7+ not reviewed, workbook *Disclose with redactions* without passages, text changed since a decision, redaction-tool elements not yet decided, or no data subject name.
 - Output, read-only in `output/personal_data_report/`: `Personal_Data_Report_<case>_<UTC>[_DRAFT].docx` and `personal_data_report_register_<case>_<UTC>[_DRAFT].csv`. The register is private: every source of every extract (origin, date, type, sender, subject, source file, item, position, text hash, decision, reviewer). Both hashes and the template's are logged (`report personal-data`).
 
-Edit the Word copy for final wording if needed, save it as PDF and record what was sent (OPERATIONS). *Download copy* gives a copy of a build; downloads are logged too.
+The same build runs from the terminal with `dsar personal-data-report --reviewer "<your name>"`. Edit the Word copy for final wording if needed, save it as PDF and record what was sent (OPERATIONS). *Download copy* gives a copy of a build; downloads are logged too.
 
 ## Cases page (switching case)
 

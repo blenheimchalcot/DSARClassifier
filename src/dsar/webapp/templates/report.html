@@ -14,6 +14,33 @@
   <div class="card"><b>{{ data.review.documents | length }}</b><span class="muted small">items released as documents (in full or redacted): not in this report</span></div>
 </div>
 
+{% if error %}<div class="err">{{ error }}</div>{% endif %}
+{% if data.folder_rows %}
+<h2>Redaction folders</h2>
+<table class="t">
+  <tr><th>Folder</th><th>In the report?</th><th></th></tr>
+  {% for f in data.folder_rows %}
+  <tr>
+    <td class="mono">{{ f.path.name }}{% if f.copy_of %}<div class="small warnline" style="font-family:inherit">Every file here is an exact copy of a file in <b>{{ f.copy_of.split('/')[-1] }}</b>.</div>{% endif %}</td>
+    <td>{% if f.included %}<span class="pill ok">included</span>{% else %}<span class="pill warn">left out</span><div class="small">{{ f.choice.reason }} ({{ f.choice.reviewer }}, {{ f.choice.at }})</div>{% endif %}</td>
+    <td>
+      <form method="post" action="{{ url_for('review.report_folder') }}">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="folder_id" value="{{ f.id }}">
+        {% if f.included %}
+        <input type="hidden" name="include" value="0">
+        <input name="reason" required placeholder="Reason (recorded)" style="min-width:16em" value="{{ ('Identical copies of files in ' ~ f.copy_of.split('/')[-1] ~ ', which is reviewed instead') if f.copy_of }}">
+        <button class="btn sm">Leave out of report</button>
+        {% else %}
+        <input type="hidden" name="include" value="1"><button class="btn sm">Include again</button>
+        {% endif %}
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted small">A folder left out adds nothing to the report and nothing to the outstanding list. The choice, the reason and your name go in the audit log.</p>
+{% endif %}
+
 {% if data.review.whole_from_workbook %}
 <div class="note">{{ data.review.whole_from_workbook | length }} extract(s) come from workbook “Disclose” decisions and are the whole passage. Open them in Review and choose the passages to narrow them.</div>
 {% endif %}

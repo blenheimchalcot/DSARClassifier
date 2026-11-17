@@ -10,14 +10,21 @@ known (a review item's sent date, or a YYYY-MM-DD in a redaction file's name),
 undated last. The data subject sees the text only; every source of every extract
 goes in a private register beside the report, for the case record.
 
-The template is `Personal Data Report.docx` in the templates folder
-(DSAR_TEMPLATES_DIR, default <project>/Templates). Its intro is kept; the
-"INSERT DATA REPORT" guidance and "SAMPLE TABLE" label are removed, and the sample
-table becomes: Data Subject, then one "Extracted data N" row per extract.
+The template is `Personal Data Report.docx`, taken from the case's own
+data/templates/ folder if it has one (a copy tailored for the case), else from
+DSAR_TEMPLATES_DIR (default <project>/Templates). The intro is kept and the
+"INSERT DATA REPORT" guidance and "SAMPLE TABLE" label are removed. Then:
+  - the controller's generic template (it has the SAMPLE TABLE): the sample table
+    becomes Data Subject, then one "Extracted data N" row per extract;
+  - a tailored template: every row is kept as written. The extracts go in rows
+    "Extract N" after the row whose label mentions extracts or "mention you" (or at
+    the end), and that row's own [placeholder] points to them. The Data subject
+    row is filled only if it is empty or a [placeholder].
 
 A report built while anything is outstanding (items not reviewed, passages not yet
-selected, redaction elements undecided, text changed since a decision) is marked
-DRAFT in its name and on its first page. Both files are written read-only to
+selected, redaction elements undecided, text changed since a decision, or any
+[placeholder] left in the template for the operator to complete) is marked DRAFT
+in its name and on its first page. Both files are written read-only to
 output/personal_data_report/ and logged with their SHA-256 and the template's.
 """
 import copy
@@ -28,7 +35,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from dsar import audit, disclosure
+from dsar import audit, db, disclosure
 
 TEMPLATE_NAME = "Personal Data Report.docx"
 OUT_DIR = "personal_data_report"
@@ -42,8 +49,17 @@ def templates_dir() -> Path:
     return Path(env).expanduser() if env else Path(__file__).resolve().parents[2] / "Templates"
 
 
-def template_path() -> Path:
+def template_path(data_dir: Path | None = None) -> Path:
+    """The case's own template if it has one, else the shared one."""
+    if data_dir is not None:
+        own = Path(data_dir) / "templates" / TEMPLATE_NAME
+        if own.is_file():
+            return own
     return templates_dir() / TEMPLATE_NAME
+
+
+_PLACEHOLDER = re.compile(r"\[[^\]\n]{2,}\]")
+_ANCHOR = re.compile(r"extract|mention you", re.I)
 
 
 def _norm(text: str) -> str:
@@ -73,8 +89,57 @@ def redaction_pieces(folders: dict[str, Path]) -> tuple[list[dict], list[dict]]:
     return pieces, undecided
 
 
+def folder_choices(conn) -> dict[str, dict]:
+    out = {}
+    for r in conn.execute("SELECT * FROM report_folder_choices ORDER BY decided_at, rowid"):
+        out[r["folder"]] = {"included": bool(r["included"]), "reason": r["reason"] or "",
+                            "reviewer": r["reviewer"], "at": r["decided_at"]}
+    return out
+
+
+def choose_folder(conn, folder: Path, included: bool, reason: str, reviewer: str) -> dict:
+    reason = reason.strip()
+    if not included and not reason:
+        raise ValueError("leaving a folder out of the report needs a reason")
+    if not reviewer:
+        raise ValueError("sign in first")
+    conn.execute("INSERT INTO report_folder_choices (folder, included, reason, reviewer, decided_at) VALUES (?,?,?,?,?)",
+                 (str(folder), int(included), reason or None, reviewer, db._now()))
+    conn.commit()
+    return {"folder": str(folder), "included": included, "reason": reason, "reviewer": reviewer}
+
+
+def copies_elsewhere(folders: dict[str, Path]) -> dict[str, str]:
+    """Folders whose every .txt file is byte-identical to a file in another folder: {folder: other folder}."""
+    hashes = {fid: {audit.sha256_file(f) for f in p.glob("*.txt")} for fid, p in folders.items()}
+    out = {}
+    for fid, mine in hashes.items():
+        for other, theirs in hashes.items():
+            if other != fid and mine and mine <= theirs and (mine != theirs or fid > other):
+                out[fid] = str(folders[other])
+                break
+    return out
+
+
+def folder_rows(conn, folders: dict[str, Path]) -> list[dict]:
+    """Each redaction folder with whether it counts towards the report, and why not."""
+    choices, copies = folder_choices(conn), copies_elsewhere(folders)
+    rows = []
+    for fid, path in folders.items():
+        c = choices.get(str(path))
+        rows.append({"id": fid, "path": path, "included": c["included"] if c else True, "choice": c,
+                     "copy_of": copies.get(fid, "")})
+    return rows
+
+
 def assemble(conn, folders: dict[str, Path]) -> dict:
-    """Everything the report would contain now, merged and ordered, plus what is outstanding."""
+    """Everything the report would contain now, merged and ordered, plus what is outstanding.
+
+    Redaction folders the operator left out (report_folder_choices) are skipped and listed.
+    """
+    rows = folder_rows(conn, folders)
+    excluded = [{"folder": str(r["path"]), **r["choice"]} for r in rows if not r["included"]]
+    folders = {r["id"]: r["path"] for r in rows if r["included"]}
     review = disclosure.report_inputs(conn)
     red_pieces, undecided = redaction_pieces(folders)
     merged: dict[str, dict] = {}
@@ -90,7 +155,7 @@ def assemble(conn, folders: dict[str, Path]) -> dict:
     outstanding = review["outstanding"] + review["changed"] + undecided
     return {"extracts": extracts, "outstanding": outstanding, "review": review,
             "from_review": len(review["pieces"]), "from_redaction": len(red_pieces),
-            "folders": [str(p) for p in folders.values()]}
+            "folders": [str(p) for p in folders.values()], "excluded_folders": excluded, "folder_rows": rows}
 
 
 def _set_cell(cell, text: str) -> None:
@@ -113,12 +178,14 @@ def _set_cell(cell, text: str) -> None:
             run._r.insert(0, copy.deepcopy(run_fmt))
 
 
-def build_docx(template: Path, subject_name: str, extracts: list[dict], draft_note: str = "") -> bytes:
+def _fill(template: Path, subject_name: str, extracts: list[dict]):
     import docx
 
     doc = docx.Document(str(template))
+    generic = False
     for p in list(doc.paragraphs):
         t = p.text.strip()
+        generic = generic or t == "SAMPLE TABLE"
         if t.startswith("INSERT DATA REPORT") or t == "SAMPLE TABLE":
             p._p.getparent().remove(p._p)
     if not doc.tables:
@@ -126,17 +193,50 @@ def build_docx(template: Path, subject_name: str, extracts: list[dict], draft_no
     table = doc.tables[0]
     rows = table.rows
     if len(rows) < 2:
-        raise ValueError(f"{template.name}: the table needs a header row and a 'Data Subject' row")
-    model = copy.deepcopy(rows[1]._tr)
-    for r in list(rows)[2:]:
-        r._tr.getparent().remove(r._tr)
-    _set_cell(table.rows[1].cells[1], subject_name)
+        raise ValueError(f"{template.name}: the table needs a header row and a 'Data subject' row")
+    if generic:
+        model = copy.deepcopy(rows[1]._tr)
+        for r in list(rows)[2:]:
+            r._tr.getparent().remove(r._tr)
+        _set_cell(table.rows[1].cells[1], subject_name)
+        for n, e in enumerate(extracts, start=1):
+            table._tbl.append(copy.deepcopy(model))
+            row = table.rows[-1]
+            _set_cell(row.cells[0], f"Extracted data {n}:")
+            _set_cell(row.cells[1], e["text"])
+        return doc
+    subject_row = rows[1]
+    value = subject_row.cells[1].text.strip()
+    if subject_name and (not value or _PLACEHOLDER.fullmatch(value)):
+        _set_cell(subject_row.cells[1], subject_name)
+    anchor = next((r for r in list(rows)[1:] if _ANCHOR.search(r.cells[0].text)), rows[-1])
+    if extracts and _PLACEHOLDER.fullmatch(anchor.cells[1].text.strip()):
+        _set_cell(anchor.cells[1], f"See Extract 1{f' to Extract {len(extracts)}' if len(extracts) > 1 else ''} below.")
+    model, after = copy.deepcopy(anchor._tr), anchor._tr
     for n, e in enumerate(extracts, start=1):
         tr = copy.deepcopy(model)
-        table._tbl.append(tr)
-        row = table.rows[-1]
-        _set_cell(row.cells[0], f"Extracted data {n}:")
+        after.addnext(tr)
+        after = tr
+        from docx.table import _Row
+        row = _Row(tr, table)
+        _set_cell(row.cells[0], f"Extract {n}:")
         _set_cell(row.cells[1], e["text"])
+    return doc
+
+
+def placeholders(doc) -> list[str]:
+    """[Bracketed] text left in the document for the operator to complete."""
+    texts = [p.text for p in doc.paragraphs]
+    for t in doc.tables:
+        for row in t.rows:
+            if re.match(r"Extract(ed data)? \d+:", row.cells[0].text.strip()):
+                continue        # extract text is the source's own, brackets and all
+            texts += [c.text for c in row.cells]
+    return list(dict.fromkeys(m for t in texts for m in _PLACEHOLDER.findall(t)))
+
+
+def build_docx(template: Path, subject_name: str, extracts: list[dict], draft_note: str = "") -> bytes:
+    doc = _fill(template, subject_name, extracts)
     if draft_note:
         first = doc.paragraphs[0]
         para = first.insert_paragraph_before()
@@ -163,17 +263,20 @@ def register_csv(extracts: list[dict]) -> bytes:
 
 def build(conn, output_dir: Path, case_ref: str, subject_name: str, folders: dict[str, Path], reviewer: str) -> dict:
     """Write the report and its private register into the case, read-only, and log them."""
-    template = template_path()
+    template = template_path(Path(output_dir).parent)
     if not template.is_file():
         raise FileNotFoundError(f"Template not found: {template}. Put '{TEMPLATE_NAME}' there or set DSAR_TEMPLATES_DIR.")
     data = assemble(conn, folders)
     n_out = len(data["outstanding"])
-    draft = n_out > 0 or not subject_name
+    left = placeholders(_fill(template, subject_name, data["extracts"]))
+    draft = n_out > 0 or not subject_name or bool(left)
     note = ""
     if draft:
         bits = [f"{n_out} item(s) outstanding"] if n_out else []
         if not subject_name:
             bits.append("no data subject name in the case config")
+        if left:
+            bits.append(f"{len(left)} [placeholder](s) in the template still to complete")
         note = f"DRAFT: not for release. {'; '.join(bits)}."
     out_dir = Path(output_dir) / OUT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -195,10 +298,11 @@ def build(conn, output_dir: Path, case_ref: str, subject_name: str, folders: dic
               "from_redaction": data["from_redaction"], "outstanding": n_out,
               "whole_passages_from_workbook": len(data["review"]["whole_from_workbook"]),
               "decisions": data["review"]["decisions"], "redaction_folders": data["folders"],
+              "excluded_folders": data["excluded_folders"],
               "sha256": {report_path.name: audit.sha256_file(report_path),
                          register_path.name: audit.sha256_file(register_path),
                          "template": audit.sha256_file(template)},
-              "template": str(template), "reviewer": reviewer}
+              "template": str(template), "placeholders_left": left, "reviewer": reviewer}
     audit.AuditLog(output_dir).append("report", "report personal-data", result)
     return result
 

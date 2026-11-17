@@ -196,6 +196,16 @@ CREATE TABLE IF NOT EXISTS decision_spans (
 );
 
 CREATE INDEX IF NOT EXISTS idx_decision_spans_decision ON decision_spans(decision_id);
+
+-- Redaction-tool folders left out of (or put back into) the Personal Data Report,
+-- with the reason and who decided. Append-only; the newest row per folder counts.
+CREATE TABLE IF NOT EXISTS report_folder_choices (
+    folder      TEXT NOT NULL,
+    included    INTEGER NOT NULL,
+    reason      TEXT,
+    reviewer    TEXT NOT NULL,
+    decided_at  TEXT NOT NULL
+);
 """
 
 

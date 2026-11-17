@@ -28,14 +28,20 @@ def _fid(path: Path) -> str:
     return hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:12]
 
 
-def folders() -> dict[str, Path]:
-    s = current_app.config["DSAR"]
+def case_folders(output_dir: Path) -> dict[str, Path]:
+    """Every folder under a case output/ that holds .txt files (not the tools' own export folders)."""
     found: list[Path] = []
-    if s.case_bound and s.output_dir.is_dir():
-        for d in sorted(p for p in s.output_dir.rglob("*") if p.is_dir()):
-            rel = d.relative_to(s.output_dir).parts
+    if output_dir.is_dir():
+        for d in sorted(p for p in output_dir.rglob("*") if p.is_dir()):
+            rel = d.relative_to(output_dir).parts
             if len(rel) <= 3 and not _SKIP.intersection(rel) and any(d.glob("*.txt")):
                 found.append(d)
+    return {_fid(p): p for p in found}
+
+
+def folders() -> dict[str, Path]:
+    s = current_app.config["DSAR"]
+    found = list(case_folders(s.output_dir).values()) if s.case_bound else []
     found += [Path(p) for p in s.markup_folders] + list(_added.values())
     return {_fid(p): p for p in found}
 

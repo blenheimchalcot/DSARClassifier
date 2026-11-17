@@ -13,7 +13,7 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
-from flask import Blueprint, abort, current_app, jsonify, render_template, request, send_file, url_for
+from flask import Blueprint, abort, current_app, jsonify, redirect, render_template, request, send_file, url_for
 
 from dsar import audit, db, disclosure, personal_data_report
 from dsar.webapp import records
@@ -92,11 +92,11 @@ def decide(chunk_id):
 @bp.route("/report/")
 def report_page():
     s = _settings()
-    template = personal_data_report.template_path()
+    template = personal_data_report.template_path(s.data_dir)
     with _conn() as conn:
         data = personal_data_report.assemble(conn, _redaction_folders())
     return render_template("report.html", data=data, template=template, template_ok=template.is_file(),
-                           builds=personal_data_report.builds(s.output_dir))
+                           builds=personal_data_report.builds(s.output_dir), error=request.args.get("error", ""))
 
 
 @bp.route("/report/build", methods=["POST"])
@@ -110,6 +110,22 @@ def report_build():
             return jsonify({"success": False, "error": str(exc)}), 400
     return jsonify({"success": True, **result, "report": Path(result["report"]).name,
                     "register": Path(result["register"]).name})
+
+
+@bp.route("/report/folder", methods=["POST"])
+def report_folder():
+    s = _settings()
+    path = _redaction_folders().get(request.form.get("folder_id", ""))
+    if path is None:
+        abort(404)
+    with _conn() as conn:
+        try:
+            result = personal_data_report.choose_folder(conn, path, request.form.get("include") == "1",
+                                                        request.form.get("reason", ""), records.reviewer())
+        except ValueError as exc:
+            return redirect(url_for("review.report_page", error=str(exc)))
+    audit.AuditLog(s.output_dir).append("report", "report folder", result)
+    return redirect(url_for("review.report_page"))
 
 
 @bp.route("/report/file/<name>")

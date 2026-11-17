@@ -1026,6 +1026,41 @@ def report_cmd(db_path: str | None, out_path: str | None, run: audit.Run) -> Non
     run.hash_file("dsar.sqlite", db_path)
 
 
+@main.command(name="personal-data-report")
+@click.option("--config", "config_path", default=None,
+              help="Case config, for the data subject's name (default: config.yaml in $DSAR_DATA_DIR).")
+@click.option("--reviewer", required=True, help="Your full name: recorded with the build.")
+@_audited("personal-data-report")
+def personal_data_report_cmd(config_path: str | None, reviewer: str, run: audit.Run) -> None:
+    """Build the Personal Data Report and its private register (same as Report in `dsar serve`).
+
+    Uses review decisions and every redaction-tool folder under output/. DRAFT while
+    anything is outstanding. See docs/TOOLBOX.md.
+    """
+    from dsar import personal_data_report, webapp
+    from dsar.toolbox.redaction import web as redaction_web
+
+    data_dir = _data_dir()
+    settings = webapp.Settings.for_case(data_dir, Path(config_path) if config_path else None)
+    db_path = data_dir / "dsar.sqlite"
+    if not db_path.is_file():
+        raise click.ClickException(f"No dsar.sqlite in {data_dir}")
+    folders = redaction_web.case_folders(settings.output_dir)
+    with db.connect(db_path) as conn:
+        db.init_schema(conn)
+        result = personal_data_report.build(conn, settings.output_dir, settings.case_ref, settings.subject_name,
+                                            folders, reviewer)
+    click.echo(f"{'DRAFT ' if result['draft'] else ''}Personal Data Report: {result['report']}")
+    click.echo(f"  {result['extracts']} extracts ({result['from_review']} from review, "
+               f"{result['from_redaction']} from redaction), {result['outstanding']} outstanding, "
+               f"{len(result['placeholders_left'])} template placeholder(s) left")
+    click.echo(f"  Register (private): {result['register']}")
+    run.data.update(report=result["report"], draft=result["draft"], extracts=result["extracts"],
+                    outstanding=result["outstanding"])
+    if result["draft"]:
+        run.warn("built as DRAFT")
+
+
 @main.command(name="manifest")
 @click.option("--stage", default=None,
               help="Label for this hashing pass, e.g. 'Purview ZIPs before extraction'.")

@@ -171,3 +171,68 @@ def test_review_pages_need_a_case_and_a_database(case, tmp_path):
     (empty / "output").mkdir(parents=True)
     app, c = client_for(webapp.Settings.for_case(empty))
     assert c.get("/review/").status_code == 404 and not (empty / "dsar.sqlite").exists()
+
+
+def test_a_case_tailored_template_keeps_its_rows_and_flags_placeholders(case, template, monkeypatch):
+    own = case / "templates"
+    own.mkdir()
+    doc = docx.Document()
+    doc.add_paragraph("Personal Data Report")
+    doc.add_paragraph("INSERT DATA REPORT: list each item once.")
+    t = doc.add_table(rows=5, cols=2)
+    for row, (k, v) in zip(t.rows, [("Personal data", "Data held"), ("Data subject:", "[Insert]"),
+                                    ("Email address:", "sam@example.test"),
+                                    ("Internal emails that mention you:", "[Insert extracts]"),
+                                    ("Recruitment decision:", "[Insert]")]):
+        row.cells[0].text, row.cells[1].text = k, v
+    doc.save(own / personal_data_report.TEMPLATE_NAME)
+    with db.connect(case / "dsar.sqlite") as conn:
+        for cid, text in (("a", TEXT_A), ("b", TEXT_B)):
+            disclosure.record(conn, cid, {"decision": disclosure.EXTRACT, "content_sha256": disclosure.content_sha256(text),
+                                          "spans": [{"kind": "extract", "start": 0, "end": len(text)}]}, "R")
+        assert personal_data_report.template_path(case) == own / personal_data_report.TEMPLATE_NAME
+        result = personal_data_report.build(conn, case / "output", "DSAR-TEST-1", "Sam Sample", {}, "R")
+    assert result["draft"] and result["outstanding"] == 1 and result["placeholders_left"] == ["[Insert]"]  # d (score 8) undecided
+    out = docx.Document(result["report"])
+    rows = [[c.text for c in r.cells] for r in out.tables[0].rows]
+    assert rows[:4] == [["Personal data", "Data held"], ["Data subject:", "Sam Sample"],
+                        ["Email address:", "sam@example.test"],
+                        ["Internal emails that mention you:", "See Extract 1 to Extract 2 below."]]
+    assert [r[0] for r in rows[4:6]] == ["Extract 1:", "Extract 2:"] and rows[6] == ["Recruitment decision:", "[Insert]"]
+    assert "placeholder" in out.paragraphs[0].text and "INSERT DATA REPORT" not in "\n".join(p.text for p in out.paragraphs)
+
+
+def test_cli_builds_the_report(case, template, monkeypatch):
+    from click.testing import CliRunner
+
+    from dsar import cli
+
+    monkeypatch.setenv("DSAR_DATA_DIR", str(case))
+    r = CliRunner().invoke(cli.main, ["personal-data-report", "--reviewer", "Test Reviewer"])
+    assert r.exit_code == 0, r.output
+    assert "DRAFT Personal Data Report" in r.output
+    cmds = [e["command"] for e in audit.AuditLog(case / "output").entries()]
+    assert "report personal-data" in cmds and cmds[-1] == "personal-data-report"
+
+
+def test_a_redaction_folder_can_be_left_out_with_a_reason(case, template):
+    from dsar.toolbox.redaction import web
+
+    for name in ("deep", "copy"):
+        d = case / "output" / name
+        d.mkdir()
+        (d / "01_note.txt").write_text("Sam Sample starts on Monday.\n")
+    app, c = client_for(webapp.Settings.for_case(case))
+    with app.test_request_context():
+        ids = {p.name: fid for fid, p in web.folders().items()}
+    page = c.get("/report/").get_data(as_text=True)
+    assert "exact copy" in page
+    r = c.post("/report/folder", data={"csrf": c.csrf, "folder_id": ids["copy"], "include": "0", "reason": ""})
+    assert "error=" in r.headers["Location"]
+    c.post("/report/folder", data={"csrf": c.csrf, "folder_id": ids["copy"], "include": "0", "reason": "Copies of deep"})
+    with db.connect(case / "dsar.sqlite") as conn:
+        a = personal_data_report.assemble(conn, {fid: case / "output" / n for n, fid in ids.items()})
+    assert [e["folder"].rsplit("/", 1)[-1] for e in a["excluded_folders"]] == ["copy"]
+    assert [o["file"].split("/")[-2] for o in a["outstanding"] if "file" in o] == ["deep"]
+    entry = audit.AuditLog(case / "output").entries()[-1]
+    assert entry["command"] == "report folder" and entry["data"]["reason"] == "Copies of deep"
