@@ -1,0 +1,314 @@
+"""Review decisions in the web app, and the Personal Data Report built from them (synthetic data only)."""
+import csv
+import re
+import stat
+
+import docx
+import pytest
+
+from dsar import audit, db, disclosure, personal_data_report, webapp
+from dsar.chunking import Chunk
+from tests.test_webapp import client_for
+
+TEXT_A = ("Hello team,\n\nSam Sample's new address is 1 Example Road.\n\n"
+          "Alex Other said the rota is fine.\n\nThanks")
+TEXT_B = "Minutes: Sam Sample raised a grievance about the rota."
+TEXT_C = "Sam Sample was copied on the newsletter."
+
+
+def _chunk(cid, content, score, subject, sent):
+    return Chunk(chunk_id=cid, source_type="email", source_path=f"/case/input/{cid}.pst", item_ref=f"msg-{cid}",
+                 content=content, subject=subject, metadata={"sent": sent, "sender": "someone@example.test"},
+                 alias_matched=True)
+
+
+@pytest.fixture
+def case(tmp_path):
+    data = tmp_path / "DSAR-TEST-1" / "data"
+    (data / "output").mkdir(parents=True)
+    (data / "config.yaml").write_text(
+        "subject:\n  name: Sam Sample\n  aliases: [Sam]\n  emails: [sam@example.test]\n"
+        "model:\n  default: m\n  max_tokens: 10\n  temperature: 0\n  concurrency: 1\n"
+        "chunking:\n  max_chars: 100\n  overlap_chars: 0\n")
+    with db.connect(data / "dsar.sqlite") as conn:
+        db.init_schema(conn)
+        for cid, content, score, subject, sent in (("a", TEXT_A, 7, "Address change", "2026-03-02T09:00:00"),
+                                                   ("b", TEXT_B, 9, "Minutes", "2026-01-15T09:00:00"),
+                                                   ("c", TEXT_C, 2, "Newsletter", "2026-02-01T09:00:00"),
+                                                   ("d", TEXT_B + " Again.", 8, "Old workbook", "2026-04-01")):
+            db.upsert_chunk(conn, _chunk(cid, content, score, subject, sent))
+            db.insert_classification(conn, chunk_id=cid, score=score, description="test", evidence="Sam Sample",
+                                     special_return=None, raw_response="{}", model="m", input_tokens=None,
+                                     output_tokens=None, cache_read_tokens=None)
+    return data
+
+
+@pytest.fixture
+def template(tmp_path, monkeypatch):
+    d = tmp_path / "Templates"
+    d.mkdir()
+    doc = docx.Document()
+    doc.add_paragraph("Personal Data Report ")
+    doc.add_paragraph("Enclosed with this letter is a copy of the personal data held by us.")
+    doc.add_paragraph("INSERT DATA REPORT: for example, signature.")
+    doc.add_paragraph("SAMPLE TABLE")
+    t = doc.add_table(rows=4, cols=2)
+    for row, (k, v) in zip(t.rows, [("Details of Personal Data", "Extracted Data"), ("Data Subject: ", "John Smith"),
+                                    ("Full Name:", "Mr John Smith"), ("Phone number: ", "07700000000")]):
+        row.cells[0].text, row.cells[1].text = k, v
+    doc.save(d / personal_data_report.TEMPLATE_NAME)
+    monkeypatch.setenv("DSAR_TEMPLATES_DIR", str(d))
+    return d / personal_data_report.TEMPLATE_NAME
+
+
+def _decide(c, cid, body):
+    with_sha = {"content_sha256": disclosure.content_sha256({"a": TEXT_A, "b": TEXT_B, "c": TEXT_C,
+                                                            "d": TEXT_B + " Again."}[cid]), **body}
+    return c.post(f"/review/api/item/{cid}/decide", json=with_sha, headers={"X-CSRF": c.csrf})
+
+
+def test_queue_lists_7_plus_and_decided_items(case):
+    app, c = client_for(webapp.Settings.for_case(case))
+    page = c.get("/review/").get_data(as_text=True)
+    assert "Address change" in page and "Minutes" in page and "Newsletter" not in page
+    assert "To review (3)" in page
+    page = c.get("/review/item/a").get_data(as_text=True)
+    assert "Address change" in page and "Extract selection" in page
+
+
+def test_decisions_are_validated_stored_append_only_and_audited(case):
+    app, c = client_for(webapp.Settings.for_case(case))
+    r = _decide(c, "a", {"decision": disclosure.EXTRACT, "spans": []})
+    assert r.status_code == 400 and "select at least one passage" in r.get_json()["error"]
+    r = _decide(c, "a", {"decision": disclosure.WITHHOLD})
+    assert r.status_code == 400 and "exemption" in r.get_json()["error"]
+    r = _decide(c, "a", {"decision": disclosure.RELEASE_REDACTED, "spans": [{"kind": "redact", "start": 0, "end": 5}]})
+    assert r.status_code == 400 and "reason" in r.get_json()["error"]
+    r = c.post("/review/api/item/a/decide", json={"decision": disclosure.RELEASE, "content_sha256": "0" * 64},
+               headers={"X-CSRF": c.csrf})
+    assert r.status_code == 400 and "changed" in r.get_json()["error"]
+
+    a = TEXT_A.index("Sam Sample's"), TEXT_A.index("Road.") + 5
+    r = _decide(c, "a", {"decision": disclosure.EXTRACT, "spans": [{"kind": "extract", "start": a[0], "end": a[1]}]})
+    assert r.status_code == 200 and r.get_json()["success"]
+    r = _decide(c, "a", {"decision": disclosure.NOT_SUBJECT})          # a change of mind is a new row
+    assert r.status_code == 200
+    with db.connect(case / "dsar.sqlite") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM decisions WHERE chunk_id='a'").fetchone()[0] == 2
+        assert disclosure.latest(conn)["a"]["decision"] == disclosure.NOT_SUBJECT
+        assert conn.execute("SELECT score FROM classifications WHERE chunk_id='a'").fetchone()[0] == 7
+    entries = [e for e in audit.AuditLog(case / "output").entries() if e["command"] == "review decide"]
+    assert len(entries) == 2 and entries[0]["data"]["reviewer"] == "Test Reviewer"
+    assert entries[0]["data"]["content_sha256"] == disclosure.content_sha256(TEXT_A)
+
+
+def test_report_merges_review_workbook_and_redaction_extracts_into_the_template(case, template):
+    from dsar.toolbox.redaction import markup
+
+    app, c = client_for(webapp.Settings.for_case(case))
+    a = TEXT_A.index("Sam Sample's"), TEXT_A.index("Road.") + 5
+    assert _decide(c, "a", {"decision": disclosure.EXTRACT,
+                            "spans": [{"kind": "extract", "start": a[0], "end": a[1]}]}).status_code == 200
+    assert _decide(c, "b", {"decision": disclosure.EXTRACT, "spans": [{"kind": "extract", "start": 0,
+                                                                        "end": len(TEXT_B)}]}).status_code == 200
+    # A workbook decision: "Disclose with redactions" can't be applied from notes, so it stays outstanding.
+    with db.connect(case / "dsar.sqlite") as conn:
+        conn.execute("INSERT INTO review_decisions (chunk_id, decision, reason, reviewer, workbook, workbook_sha256, "
+                     "imported_at) VALUES ('d', 'Disclose with redactions', 'Other (explain in notes)', 'R', "
+                     "'wb.xlsx', 'x', '2026-11-01T00:00:00+00:00')")
+    # A redaction-tool folder whose passage repeats a review extract (merged) and adds one more.
+    folder = case / "output" / "deep_dive"
+    folder.mkdir()
+    (folder / "01_2026-02-10_note.txt").write_text(TEXT_B + "\n\nSam Sample starts on Monday.\n")
+    f = markup.Folder(folder, "Test Reviewer", None)
+    doc = f.docs()[0]
+    for el in doc["elements"]:
+        f.act({"file": doc["name"], "sha256": doc["sha256"], "action": "decide", "element": el["id"],
+               "decision": "release"})
+
+    page = c.get("/report/").get_data(as_text=True)
+    assert "Outstanding" in page and "select the passages" in page
+    r = c.post("/report/build", headers={"X-CSRF": c.csrf})
+    j = r.get_json()
+    assert j["success"] and j["draft"] and j["extracts"] == 3 and j["outstanding"] == 1
+    out = case / "output" / personal_data_report.OUT_DIR
+    report_path = out / j["report"]
+    assert "_DRAFT" in report_path.name and not report_path.stat().st_mode & stat.S_IWUSR
+    d = docx.Document(str(report_path))
+    body = "\n".join(p.text for p in d.paragraphs)
+    assert body.startswith("DRAFT") and "INSERT DATA REPORT" not in body and "SAMPLE TABLE" not in body
+    rows = [[cell.text for cell in row.cells] for row in d.tables[0].rows]
+    assert rows[1] == ["Data Subject: ", "Sam Sample"]
+    assert [r[0] for r in rows[2:]] == ["Extracted data 1:", "Extracted data 2:", "Extracted data 3:"]
+    # Oldest first, text only: no sender, subject or date in the report.
+    assert rows[2][1] == TEXT_B and rows[3][1] == "Sam Sample starts on Monday."
+    assert rows[4][1] == "Sam Sample's new address is 1 Example Road."
+    assert "someone@example.test" not in body + str(rows) and "John Smith" not in str(rows)
+    with (out / j["register"]).open() as fh:
+        reg = list(csv.DictReader(fh))
+    assert {r["origin"] for r in reg if r["extract_no"] == "1"} == {"review", "redaction"}
+    entry = audit.AuditLog(case / "output").entries()[-1]
+    assert entry["command"] == "report personal-data" and entry["data"]["sha256"][report_path.name] == \
+        audit.sha256_file(report_path) and "template" in entry["data"]["sha256"]
+
+
+def test_workbook_disclose_is_whole_passage_and_changed_text_is_outstanding(case, template):
+    with db.connect(case / "dsar.sqlite") as conn:
+        conn.execute("INSERT INTO review_decisions (chunk_id, decision, reviewer, workbook, workbook_sha256, "
+                     "imported_at) VALUES ('b', 'Disclose', 'R', 'wb.xlsx', 'x', '2026-11-01T00:00:00+00:00')")
+        disclosure.record(conn, "a", {"decision": disclosure.EXTRACT, "content_sha256": disclosure.content_sha256(TEXT_A),
+                                      "spans": [{"kind": "extract", "start": 0, "end": 11}]}, "R")
+        conn.execute("UPDATE chunks SET content = 'changed' WHERE chunk_id = 'a'")
+        data = disclosure.report_inputs(conn)
+    assert data["whole_from_workbook"] == ["b"] and data["pieces"][0]["text"] == TEXT_B
+    assert [o["chunk_id"] for o in data["changed"]] == ["a"]
+
+
+def test_review_pages_need_a_case_and_a_database(case, tmp_path):
+    app, c = client_for(webapp.Settings())
+    assert c.get("/review/").status_code == 404
+    empty = tmp_path / "DSAR-EMPTY" / "data"
+    (empty / "output").mkdir(parents=True)
+    app, c = client_for(webapp.Settings.for_case(empty))
+    assert c.get("/review/").status_code == 404 and not (empty / "dsar.sqlite").exists()
+
+
+def test_a_case_tailored_template_keeps_its_rows_and_flags_placeholders(case, template, monkeypatch):
+    own = case / "templates"
+    own.mkdir()
+    doc = docx.Document()
+    doc.add_paragraph("Personal Data Report")
+    doc.add_paragraph("INSERT DATA REPORT: list each item once.")
+    t = doc.add_table(rows=5, cols=2)
+    for row, (k, v) in zip(t.rows, [("Personal data", "Data held"), ("Data subject:", "[Insert]"),
+                                    ("Email address:", "sam@example.test"),
+                                    ("Internal emails that mention you:", "[Insert extracts]"),
+                                    ("Recruitment decision:", "[Insert]")]):
+        row.cells[0].text, row.cells[1].text = k, v
+    doc.save(own / personal_data_report.TEMPLATE_NAME)
+    with db.connect(case / "dsar.sqlite") as conn:
+        for cid, text in (("a", TEXT_A), ("b", TEXT_B)):
+            disclosure.record(conn, cid, {"decision": disclosure.EXTRACT, "content_sha256": disclosure.content_sha256(text),
+                                          "spans": [{"kind": "extract", "start": 0, "end": len(text)}]}, "R")
+        assert personal_data_report.template_path(case) == own / personal_data_report.TEMPLATE_NAME
+        result = personal_data_report.build(conn, case / "output", "DSAR-TEST-1", "Sam Sample", {}, "R")
+    assert result["draft"] and result["outstanding"] == 1 and result["placeholders_left"] == ["[Insert]"]  # d (score 8) undecided
+    out = docx.Document(result["report"])
+    rows = [[c.text for c in r.cells] for r in out.tables[0].rows]
+    assert rows[:4] == [["Personal data", "Data held"], ["Data subject:", "Sam Sample"],
+                        ["Email address:", "sam@example.test"],
+                        ["Internal emails that mention you:", "See Extract 1 to Extract 2 below."]]
+    assert [r[0] for r in rows[4:6]] == ["Extract 1:", "Extract 2:"] and rows[6] == ["Recruitment decision:", "[Insert]"]
+    assert "placeholder" in out.paragraphs[0].text and "INSERT DATA REPORT" not in "\n".join(p.text for p in out.paragraphs)
+
+
+def test_cli_builds_the_report(case, template, monkeypatch):
+    from click.testing import CliRunner
+
+    from dsar import cli
+
+    monkeypatch.setenv("DSAR_DATA_DIR", str(case))
+    r = CliRunner().invoke(cli.main, ["personal-data-report", "--reviewer", "Test Reviewer"])
+    assert r.exit_code == 0, r.output
+    assert "DRAFT Personal Data Report" in r.output
+    cmds = [e["command"] for e in audit.AuditLog(case / "output").entries()]
+    assert "report personal-data" in cmds and cmds[-1] == "personal-data-report"
+
+
+def test_a_redaction_folder_can_be_left_out_with_a_reason(case, template):
+    from dsar.toolbox.redaction import web
+
+    for name in ("deep", "copy"):
+        d = case / "output" / name
+        d.mkdir()
+        (d / "01_note.txt").write_text("Sam Sample starts on Monday.\n")
+    app, c = client_for(webapp.Settings.for_case(case))
+    with app.test_request_context():
+        ids = {p.name: fid for fid, p in web.folders().items()}
+    page = c.get("/report/").get_data(as_text=True)
+    assert "exact copy" in page
+    r = c.post("/report/folder", data={"csrf": c.csrf, "folder_id": ids["copy"], "include": "0", "reason": ""})
+    assert "error=" in r.headers["Location"]
+    c.post("/report/folder", data={"csrf": c.csrf, "folder_id": ids["copy"], "include": "0", "reason": "Copies of deep"})
+    with db.connect(case / "dsar.sqlite") as conn:
+        a = personal_data_report.assemble(conn, {fid: case / "output" / n for n, fid in ids.items()})
+    assert [e["folder"].rsplit("/", 1)[-1] for e in a["excluded_folders"]] == ["copy"]
+    assert [o["file"].split("/")[-2] for o in a["outstanding"] if "file" in o] == ["deep"]
+    entry = audit.AuditLog(case / "output").entries()[-1]
+    assert entry["command"] == "report folder" and entry["data"]["reason"] == "Copies of deep"
+
+
+@pytest.fixture
+def family_case(case, template):
+    """DSAR-TEST-1 as a deeper search (reviewed there) under a main case DSAR-TEST-0."""
+    main = case.parent.parent / "DSAR-TEST-0" / "data"
+    (main / "output").mkdir(parents=True)
+    audit.AuditLog(main / "output").append("note", "audit note", {"text": "main case"})
+    (case / "case.json").write_text('{"parent": "DSAR-TEST-0", "role": "deeper search", "review_here": true}')
+    return main
+
+
+def test_report_from_a_deeper_search_goes_to_the_main_case(case, family_case):
+    s = webapp.Settings.for_case(case)
+    assert s.parent_ref == "DSAR-TEST-0"
+    app, c = client_for(s)
+    assert "deeper search under" in c.get("/report/").get_data(as_text=True)
+    j = c.post("/report/build", headers={"X-CSRF": c.csrf}).get_json()
+    assert j["success"] and j["report"].startswith("Personal_Data_Report_DSAR-TEST-0_")
+    assert (family_case / "output" / personal_data_report.OUT_DIR / j["report"]).is_file()
+    for out in (family_case / "output", case / "output"):
+        assert audit.AuditLog(out).entries()[-1]["command"] == "report personal-data"
+    # In the main case, Review and Report point to the deeper search.
+    app, c = client_for(webapp.Settings.for_case(family_case))
+    assert "reviewed in DSAR-TEST-1" in c.get("/review/").get_data(as_text=True)
+    page = c.get("/cases/").get_data(as_text=True)
+    assert page.index("DSAR-TEST-0") < page.index("DSAR-TEST-1") and "main case" in page
+
+
+def test_release_checklist_deadline_and_confirmations_are_logged_in_the_main_case(case, family_case, monkeypatch):
+    from dsar.webapp import release
+
+    monkeypatch.delenv("DSAR_CASE_DOCS_ROOT", raising=False)
+    app, c = client_for(webapp.Settings.for_case(case))
+    page = c.get("/").get_data(as_text=True)
+    assert "Release of DSAR-TEST-0" in page and "Deadline unknown" in page and "Items scored 7+ decided" in page
+    r = c.post("/release/check", data={"csrf": c.csrf, "item": "received", "done": "1", "value": "20/10/2026"})
+    assert "error=" in r.headers["Location"]
+    c.post("/release/check", data={"csrf": c.csrf, "item": "received", "done": "1", "value": "2026-10-20"})
+    assert "Fri 20 Nov 2026" in c.get("/").get_data(as_text=True)
+    entry = audit.AuditLog(family_case / "output").entries()[-1]
+    assert entry["command"] == "release check" and entry["data"] == {"item": "received", "done": True,
+                                                                     "value": "2026-10-20", "reviewer": "Test Reviewer"}
+    import datetime as dt
+    assert release.one_month_after(dt.date(2026, 1, 31)) == dt.date(2026, 2, 28)
+
+
+def test_release_documents_are_checked_against_the_templates(case, family_case, tmp_path, monkeypatch):
+    from dsar.webapp import release
+
+    root = tmp_path / "docs"
+    (root / "DSAR-TEST-0" / "Templates").mkdir(parents=True)
+    (root / "DSAR-TEST-0" / "Output").mkdir()
+
+    def save(path, *paras):
+        d = docx.Document()
+        for p in paras:
+            d.add_paragraph(p)
+        d.save(path)
+
+    t, o = root / "DSAR-TEST-0" / "Templates", root / "DSAR-TEST-0" / "Output"
+    save(t / "Exemptions Report.docx", "Exemptions Report", "[Insert exemptions]")
+    save(t / "Data not in Scope.docx", "Data not in Scope")
+    save(t / "Subject Access Request - Final Response Letter Template.docx", "Dear [Name]")
+    save(o / "DSAR-TEST-0 Response Letter.docx", "Dear Sam", "Enclosed documents", "Exemptions Report",
+         "Data not in Scope", "Privacy Policy v1")
+    save(o / "Exemptions Report.docx", "Exemptions Report", "Search scope – confirm before sending")
+    (o / "Data not in Scope.docx").write_bytes((t / "Data not in Scope.docx").read_bytes())
+    monkeypatch.setenv("DSAR_CASE_DOCS_ROOT", str(root))
+    d = release.documents("DSAR-TEST-0", family_case / "output")
+    status = {r["document"]: r["status"] for r in d["rows"]}
+    assert status == {"Exemptions Report": "to complete", "Data not in Scope": "unchanged template",
+                      "Response letter": "ready"}
+    assert {e["name"]: e["present"] for e in d["enclosures"]} == {"Exemptions Report": True, "Data not in Scope": True,
+                                                                  "Privacy Policy v1": False}
+    assert not d["ready"]

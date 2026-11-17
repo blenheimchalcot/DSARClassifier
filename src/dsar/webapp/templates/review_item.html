@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Review item{% endblock %}
+{% block content %}
+<p class="small"><a href="{{ url_for('review.queue') }}">← Review queue</a></p>
+<h1>{{ it.title or "(no title)" }}</h1>
+<div class="grid2">
+  <div>
+    <table class="t kv">
+      <tr><th>Type</th><td>{{ it.source_type }}</td></tr>
+      <tr><th>Date</th><td>{{ it.date }}</td></tr>
+      {% if it.from %}<tr><th>From</th><td>{{ it.from }}</td></tr>{% endif %}
+      {% if it.to %}<tr><th>To</th><td>{{ it.to }}</td></tr>{% endif %}
+      {% if it.cc %}<tr><th>Cc</th><td>{{ it.cc }}</td></tr>{% endif %}
+      {% if it.custodian %}<tr><th>Custodian</th><td>{{ it.custodian }}</td></tr>{% endif %}
+      {% if it.location %}<tr><th>Location</th><td class="small">{{ it.location }}</td></tr>{% endif %}
+      {% if it.attachment_parents %}<tr><th>Attached to</th><td class="small">{{ it.attachment_parents }}</td></tr>{% endif %}
+      <tr><th>Source</th><td class="mono">{{ it.source_path }} · {{ it.item_ref }}</td></tr>
+    </table>
+  </div>
+  <div>
+    <div class="card">
+      <b>Model score {{ it.score if it.score is not none else "–" }}</b>
+      <span class="pill {{ 'ok' if it.evidence_check == 'yes' else 'warn' }}">evidence in source: {{ it.evidence_check }}</span>
+      <p class="small">{{ it.reason }}</p>
+      {% if it.evidence %}<p class="small muted">Evidence: “{{ it.evidence }}”</p>{% endif %}
+      {% if it.evidence_check != 'yes' %}<p class="small warnline">The model's quote wasn't found exactly in the text: read the item before relying on the score.</p>{% endif %}
+    </div>
+  </div>
+</div>
+
+<h2>Text</h2>
+<p class="muted small">Select text, then <b>Extract selection</b> or <b>Redact selection</b>. <span class="lg ev">Model evidence</span> <span class="lg ex">To extract</span> <span class="lg rd">To redact</span></p>
+<div id="text" class="itemtext"></div>
+
+<h2>Decision</h2>
+<div class="card" id="decide">
+  <div class="choices">
+    {% for d in decisions %}
+    <label><input type="radio" name="decision" value="{{ d }}"> {{ d }}</label>
+    {% endfor %}
+  </div>
+  <div id="extract-tools" hidden>
+    <button class="btn sm" id="btn-extract" type="button">Extract selection</button>
+    <button class="btn sm" id="btn-whole" type="button">Extract whole passage</button>
+  </div>
+  <div id="redact-tools" hidden>
+    <select id="redact-reason">{% for r in reasons %}<option>{{ r }}</option>{% endfor %}</select>
+    <button class="btn sm" id="btn-redact" type="button">Redact selection</button>
+  </div>
+  <ul id="spans" class="spans"></ul>
+  <div id="reason-row" hidden><label class="small">Exemption <select id="reason"><option value=""></option>{% for r in reasons %}<option>{{ r }}</option>{% endfor %}</select></label></div>
+  <div class="row">
+    <label class="small">Score assessment <select id="assessment"><option value=""></option>{% for a in assessments %}<option>{{ a }}</option>{% endfor %}</select></label>
+    <label class="small">Your score <input id="adjusted" type="number" min="0" max="10" style="width:4em"></label>
+  </div>
+  <label class="small">Notes<br><textarea id="notes" rows="2" style="width:100%"></textarea></label>
+  <div id="msg"></div>
+  <button class="btn primary" id="save" type="button">Save and next</button>
+  <span class="muted small">Recorded as {{ reviewer }}</span>
+</div>
+
+{% if it.history %}
+<h2>History</h2>
+<table class="t">
+  <tr><th>When (UTC)</th><th>Decision</th><th>Reason / notes</th><th>By</th><th>From</th></tr>
+  {% for h in it.history | reverse %}
+  <tr><td class="small">{{ h.at }}</td><td>{{ h.decision }}{% if h.spans %} <span class="muted small">({{ h.spans | length }} passage(s))</span>{% endif %}</td>
+    <td class="small">{{ h.reason }}{% if h.notes %}<div>{{ h.notes }}</div>{% endif %}</td><td class="small">{{ h.reviewer }}</td><td class="small">{{ h.source }}</td></tr>
+  {% endfor %}
+</table>
+{% endif %}
+
+{% if it.siblings %}
+<h2>Same item or thread</h2>
+<ul class="small">
+  {% for s in it.siblings %}<li><a href="{{ url_for('review.item', chunk_id=s.chunk_id) }}">{{ s.chunk_id }}</a> {{ "same item" if s.same_item else "same thread" }} · score {{ s.score if s.score is not none else "not classified" }}</li>{% endfor %}
+</ul>
+{% endif %}
+
+<script type="application/json" id="item-data">{{ {"content": it.content, "sha": it.content_sha256, "evidence": it.evidence_spans,
+  "current": it.current, "decide_url": url_for('review.decide', chunk_id=it.chunk_id),
+  "EXTRACT": EXTRACT, "RELEASE_REDACTED": RELEASE_REDACTED, "WITHHOLD": WITHHOLD} | tojson }}</script>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='toolbox.js') }}"></script>
+<script src="{{ url_for('static', filename='review.js') }}"></script>
+{% endblock %}

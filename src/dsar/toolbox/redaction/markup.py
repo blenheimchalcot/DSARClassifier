@@ -51,6 +51,7 @@ REASONS = [
     "Legal professional privilege",
     "Confidential reference",
     "Duplicate – already in the Personal Data Report",
+    "Already reviewed and assessed",
     "Other (see note)",                 # keep last: it needs a note
 ]
 # A speaker name may be broken across one line break ("Firstname\nSurname:").
@@ -570,7 +571,7 @@ def serve(folder: Path, reviewer: str, case_output: Path | None, port: int = 0) 
 
 
 APP_PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Redaction markup</title>
+<title>Personal Data Reviewer</title>
 <style>
 :root{--bg:#f7f7f5;--panel:#fff;--ink:#1d1d1b;--muted:#6b6b66;--line:#e3e2dd;--accent:#2f5d8a;--subj:#fff4d6;--subj-line:#e0a800;--red:#b3261e;--redbg:#fbe3e1;--ok:#2e7d4f;--okbg:#e6f4ea;--part:#8a5a00;--partbg:#fdf0d5}
 @media (prefers-color-scheme: dark){:root{--bg:#161615;--panel:#1f1f1d;--ink:#ecebe6;--muted:#9a9993;--line:#34332f;--accent:#8db4dc;--subj:#3a3220;--red:#f08a7e;--redbg:#432421;--ok:#6cc08b;--okbg:#1d3324;--part:#f0c060;--partbg:#3a2f15}}
@@ -627,34 +628,34 @@ details.more .menu button{display:block;width:100%;text-align:left;border:0;back
 <script>
 const TOKEN=new URLSearchParams(location.search).get("token")||(document.querySelector('meta[name="csrf"]')||{}).content,REASONS=__REASONS__,SUBJECT=(new URLSearchParams(location.search).get("subject")||"").toLowerCase();
 const COLOURS=["#2f5d8a","#2e7d4f","#8a4b9c","#b5651d","#1f7a8c"];
-const LABEL={release:"Released",redact_full:"Redacted in full",redact_partial:"Partly redacted",pending:"Not reviewed"};
+const LABEL={release:"Extracted",redact_full:"Left out",redact_partial:"Extracted in part",pending:"Not reviewed"};
 let DOCS=[],cur=0,view="original",q="",edit=null,full=null,split=null,minScore=-1,focus=null,lastReason=REASONS[0],doneOpen=false,openRow=null;
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const reasonOpts=()=>REASONS.map(x=>`<option>${esc(x)}</option>`).join("");
 function toast(m){const t=document.getElementById("toast");t.textContent=m;t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",3000)}
 async function load(keep){const j=await (await fetch("api/docs?token="+TOKEN)).json();DOCS=j.docs;document.getElementById("who").innerHTML="Reviewer: <b>"+esc(j.reviewer)+"</b>"+(j.chain_ok?"":" · <span style='color:var(--red)'>event log chain broken</span>");if(!keep)cur=0;nav();render();if(!focus){const d=DOCS[cur];focus=(d.elements.find(e=>!d.decisions[e.id])||{}).id;render()}}
 async function act(body){Object.assign(body,{file:DOCS[cur].name,sha256:DOCS[cur].sha256});const r=await fetch("api/act",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify(body)});const j=await r.json();if(!r.ok){toast(j.error);return false}return true}
-function nav(){const f=document.getElementById("files");f.innerHTML="";DOCS.forEach((d,i)=>{const n=Object.keys(d.decisions).length,b=document.createElement("button");b.className=i===cur?"on":"";b.innerHTML=esc(d.name.replace(/\.txt$/,"").replace(/_/g," "))+`<span class="prog">${n}/${d.elements.length} reviewed · ${d.redactions.length} redaction(s)</span>`;b.onclick=()=>{if(edit&&!confirm("Discard unsaved marks?"))return;cur=i;q="";edit=null;full=null;split=null;focus=(d.elements.find(e=>!d.decisions[e.id])||{}).id;nav();render();scrollTo(0,0)};f.appendChild(b)})}
+function nav(){const f=document.getElementById("files");f.innerHTML="";DOCS.forEach((d,i)=>{const n=Object.keys(d.decisions).length,b=document.createElement("button");b.className=i===cur?"on":"";b.innerHTML=esc(d.name.replace(/\.txt$/,"").replace(/_/g," "))+`<span class="prog">${n}/${d.elements.length} reviewed · ${d.redactions.length} passage(s) left out</span>`;b.onclick=()=>{if(edit&&!confirm("Discard unsaved marks?"))return;cur=i;q="";edit=null;full=null;split=null;focus=(d.elements.find(e=>!d.decisions[e.id])||{}).id;nav();render();scrollTo(0,0)};f.appendChild(b)})}
 function hl(s){let e=esc(s);if(q){const re=new RegExp("("+q.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+")","gi");e=e.replace(re,"<mark>$1</mark>")}return e}
 // One part [a,b] of an element, with redactions rs; cls is the class for released text
 function piece(d,a,b,rs,cls,editable){let out="",pos=a;const seg0=(x,y)=>`<span data-s="${x}" class="${cls}">${hl(d.text.slice(x,y))}</span>`;
  const seg=(x,y)=>split&&split.at>x&&split.at<y?seg0(x,split.at)+`<span class="cutpt"></span>`+seg0(split.at,y):seg0(x,y);
  for(const r of rs.filter(r=>r.end>a&&r.start<b).sort((x,y)=>x.start-y.start)){const s=Math.max(r.start,a),e=Math.min(r.end,b);if(s<pos)continue;if(s>pos)out+=seg(pos,s);
   if(editable)out+=`<span class="mark" data-s="${s}" data-i="${r.i}" title="${esc(r.reason)} (click to unmark)">${hl(d.text.slice(s,e))}</span>`;
-  else if(view==="redacted")out+=`<span class="blk">█ Redacted: ${esc(r.reason)}</span>`;
+  else if(view==="redacted")out+=`<span class="blk">█ Left out: ${esc(r.reason)}</span>`;
   else out+=`<span class="cut" data-s="${s}" title="${esc(r.reason)}${r.note?": "+esc(r.note):""}">${hl(d.text.slice(s,e))}</span><span class="why">[${esc(r.reason)}]</span>`;pos=e}
  if(pos<b)out+=seg(pos,b);return out}
 // One line for a processed element; click it to open the full element.
 function row(d,el){const dec=d.decisions[el.id],st=dec.decision,text=el.parts.map(([a,b])=>d.text.slice(a,b)).join(" ").replace(/\s+/g," ").trim();
  return `<div class="row" data-row="${el.id}" title="Click to review or change"><b>${esc(el.who||el.label)}</b><span class="t">${esc(el.t||"")}</span><span class="badge ${st}">${LABEL[st]}${st==="redact_partial"?": "+dec.redactions.length:""}</span><span class="snip">${esc(text.slice(0,140))}</span></div>`}
 // The three decision buttons, on every element; the current decision is shown pressed.
-function buttons(st){return `<button class="btn big ${st==="release"?"go":""}" data-a="approve" title="A">${st==="release"?"✓ ":""}Approve</button><button class="btn big ${st==="redact_full"?"stop":""}" data-a="full" title="R">${st==="redact_full"?"✓ ":""}Redact all</button><button class="btn big ${st==="redact_partial"?"primary":""}" data-a="partial" title="P">${st==="redact_partial"?"✓ Edit parts":"Redact part"}</button>`}
+function buttons(st){return `<button class="btn big ${st==="release"?"go":""}" data-a="approve" title="A">${st==="release"?"✓ ":""}Extract</button><button class="btn big ${st==="redact_full"?"stop":""}" data-a="full" title="R">${st==="redact_full"?"✓ ":""}Leave out</button><button class="btn big ${st==="redact_partial"?"primary":""}" data-a="partial" title="P">${st==="redact_partial"?"✓ Edit parts":"Leave part out"}</button>`}
 function more(el,decided){return `<details class="more"><summary title="More">⋯</summary><div class="menu"><button data-a="split">Split…</button>${el.split?'<button data-a="unsplit">Undo split</button>':""}${decided?'<button data-a="change">Clear decision</button>':""}</div></details>`}
 function render(){const d=DOCS[cur],m=document.getElementById("main");if(!d){m.innerHTML="<p>No .txt files in this folder.</p>";return}
  const who=[...new Set(d.elements.map(e=>e.who).filter(Boolean))],n=Object.keys(d.decisions).length;
- let h=`<div class="bar"><input type="search" id="q" placeholder="Search…" value="${esc(q)}"><span class="toggle"><button data-v="original" class="${view==="original"?"on":""}">Original</button><button data-v="redacted" class="${view==="redacted"?"on":""}">Redacted</button></span>
-  <select id="min" class="btn" title="Show only elements the model scored at or above this"><option value="-1">All scores</option>${[1,5,6,7,8].map(n=>`<option value="${n}" ${minScore===n?"selected":""}>Model score ≥ ${n}</option>`).join("")}</select><button class="btn" id="all">Approve all not yet reviewed</button><button class="btn primary" id="exp">Export redacted copy</button></div>
-  <div class="legend"><span><i class="sw" style="background:var(--okbg);border:1px solid var(--ok)"></i>Released</span><span><i class="sw" style="background:var(--redbg);border:1px solid var(--red)"></i>Redacted</span><span>${n} of ${d.elements.length} elements reviewed</span><span class="keys"><kbd>A</kbd> approve · <kbd>R</kbd> redact all · <kbd>P</kbd> redact part · <kbd>↓</kbd><kbd>↑</kbd> move · <kbd>Enter</kbd> confirm</span></div>`;
+ let h=`<div class="bar"><input type="search" id="q" placeholder="Search…" value="${esc(q)}"><span class="toggle"><button data-v="original" class="${view==="original"?"on":""}">Original</button><button data-v="redacted" class="${view==="redacted"?"on":""}">As extracted</button></span>
+  <select id="min" class="btn" title="Show only elements the model scored at or above this"><option value="-1">All scores</option>${[1,5,6,7,8].map(n=>`<option value="${n}" ${minScore===n?"selected":""}>Model score ≥ ${n}</option>`).join("")}</select><button class="btn" id="all">Extract all not yet reviewed</button><button class="btn primary" id="exp">Export redacted copy</button></div>
+  <div class="legend"><span><i class="sw" style="background:var(--okbg);border:1px solid var(--ok)"></i>Extracted</span><span><i class="sw" style="background:var(--redbg);border:1px solid var(--red)"></i>Left out</span><span>${n} of ${d.elements.length} elements reviewed</span><span class="keys"><kbd>A</kbd> extract · <kbd>R</kbd> leave out · <kbd>P</kbd> leave part out · <kbd>↓</kbd><kbd>↑</kbd> move · <kbd>Enter</kbd> confirm</span></div>`;
  if(d.stale)h+=`<div class="warn">${d.stale} earlier decision(s) were made on a different version of this file and are not shown.</div>`;
  const cards={},shown=[];
  for(const el of d.elements){const text=el.parts.map(([a,b])=>d.text.slice(a,b)).join(" ");
@@ -667,7 +668,7 @@ function render(){const d=DOCS[cur],m=document.getElementById("main");if(!d){m.i
   if(editing){const rs=edit.marks.map((r,i)=>({...r,i}));body=el.parts.map(([a,b])=>piece(d,a,b,rs,"",true)).join(" ");
    ctl=`<span class="badge redact_partial">Marking parts: ${edit.marks.length}</span><span class="sp"></span><button class="btn go" data-a="save">Save</button><button class="btn" data-a="cancel">Cancel</button>`}
   else if(dec){body=el.parts.map(([a,b])=>piece(d,a,b,dec.redactions,st==="release"||st==="redact_partial"?"rel":"",false)).join(" ");
-   if(st==="redact_full"&&view==="redacted")body=`<span class="blk">█ Redacted in full: ${esc(dec.redactions[0]?.reason||"")}</span>`;
+   if(st==="redact_full"&&view==="redacted")body=`<span class="blk">█ Left out: ${esc(dec.redactions[0]?.reason||"")}</span>`;
    ctl=`<span class="badge ${st}">${LABEL[st]}${st==="redact_partial"?": "+dec.redactions.length+" part(s)":""}${st==="redact_full"?": "+esc(dec.redactions[0]?.reason||""):""}</span><span class="t">${esc(dec.reviewer)}, ${esc(dec.ts.slice(0,16).replace("T"," "))}</span><span class="sp"></span>${buttons(st)}${more(el,true)}`}
   else{body=el.parts.map(([a,b])=>piece(d,a,b,[],"",false)).join(" ");
    ctl=`<span class="badge pending">Not reviewed</span><span class="sp"></span>${buttons(st)}${more(el,false)}`}
@@ -676,7 +677,7 @@ function render(){const d=DOCS[cur],m=document.getElementById("main");if(!d){m.i
   if(editing)form=`<div class="form">Select text above to mark it. Reason for new marks: <select id="er">${reasonOpts()}</select><input id="en" placeholder="Note (required for Other)" value="${esc(edit.note||"")}"></div>`;
   if(splitting){const opts=[...who,"Unknown speaker"].map(w=>`<option ${w===split.who?"selected":""}>${esc(w)}</option>`).join("");
    form=`<div class="form">${split.at==null?"Click in the text where the new part should start.":"New part starts at the blue line. Speaker of the new part:"} <select id="sw">${opts}</select><button class="btn primary" data-a="splitok" ${split.at==null?"disabled":""}>Split here</button><button class="btn" data-a="splitcancel">Cancel</button></div>`}
-  if(full===el.id)form=`<div class="form">Redact all of this element. Reason: <select id="fr">${REASONS.map(x=>`<option ${x===lastReason?"selected":""}>${esc(x)}</option>`).join("")}</select><input id="fn" placeholder="Note (required for Other)"><button class="btn stop" data-a="fullok">Redact all (Enter)</button><button class="btn" data-a="fullcancel">Cancel (Esc)</button></div>`;
+  if(full===el.id)form=`<div class="form">Leave all of this element out. Reason: <select id="fr">${REASONS.map(x=>`<option ${x===lastReason?"selected":""}>${esc(x)}</option>`).join("")}</select><input id="fn" placeholder="Note (required for Other)"><button class="btn stop" data-a="fullok">Leave out (Enter)</button><button class="btn" data-a="fullcancel">Cancel (Esc)</button></div>`;
   const s=el.score,chip=s?(s.score==null?`<span class="sc lo" title="${esc(s.special||s.description||"")}">Model: –</span>`:`<span class="sc ${s.score>=7?"hi":s.score>=5?"mid":"lo"}" title="Model suggestion, not a decision: ${esc(s.description||"")}${s.evidence?" | "+esc(s.evidence):""}">Model ${s.score}</span>`):"";
   const name=el.who?`<b>${esc(el.who)}${el.split?" <span class='t'>(split by reviewer)</span>":""}</b><span class="t">${esc(el.t||"")}</span>`:`<b style="color:var(--muted)">${esc(el.label)}</b>`;
   cards[el.id]=`<div class="el ${st} ${subj?"subj":""} ${editing?"editing":""} ${splitting?"editing splitting":""} ${focus===el.id?"focus":""}" data-el="${el.id}" style="--c:${c}"><div class="h">${name}${chip}${ctl}</div>${prior?`<div class="prior">Decided before this element was split: ${prior}. Please decide again.</div>`:""}<div class="txt">${body}</div>${form}</div>`}
@@ -696,7 +697,7 @@ function render(){const d=DOCS[cur],m=document.getElementById("main");if(!d){m.i
  m.querySelectorAll(".row").forEach(r=>r.onclick=()=>{openRow=r.dataset.row;focus=openRow;render()});
  document.getElementById("min").onchange=ev=>{minScore=+ev.target.value;render()};
  document.getElementById("exp").onclick=()=>window.open("export?token="+TOKEN+"&file="+encodeURIComponent(d.name),"_blank");
- document.getElementById("all").onclick=async()=>{const todo=d.elements.filter(e=>!d.decisions[e.id]);if(!todo.length||!confirm(`Approve ${todo.length} element(s) not yet reviewed, for release as they are?`))return;for(const e of todo)if(!await act({action:"decide",element:e.id,decision:"release"}))break;await load(true)};
+ document.getElementById("all").onclick=async()=>{const todo=d.elements.filter(e=>!d.decisions[e.id]);if(!todo.length||!confirm(`Extract ${todo.length} element(s) not yet reviewed, as they are?`))return;for(const e of todo)if(!await act({action:"decide",element:e.id,decision:"release"}))break;await load(true)};
  m.querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const id=b.closest(".el").dataset.el,a=b.dataset.a;
   if(a==="approve"){if(DOCS[cur].decisions[id]?.decision==="release")return advance(id);if(await act({action:"decide",element:id,decision:"release"})){await load(true);advance(id)}}
   else if(a==="full"){if(edit)return toast("Save or cancel the element you are marking first");focus=id;full=id;render()}

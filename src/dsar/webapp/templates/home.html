@@ -7,8 +7,55 @@
   <h2>Tools</h2>
   {% include "_tool_cards.html" %}
 {% else %}
-  <h1>{{ settings.case_ref }}</h1>
+  <h1>{{ settings.case_ref }}{% if fam.main_ref != settings.case_ref %} <span class="muted small">{{ settings.case_role or "search" }} under {{ fam.main_ref }}</span>{% elif fam.children %} <span class="muted small">main case</span>{% endif %}</h1>
   <p class="muted small">Case data: <span class="mono">{{ settings.data_dir }}</span>{% if settings.config_path %} · config <span class="mono">{{ settings.config_path }}</span>{% endif %}</p>
+  {% if fam.children %}<p class="small">Searches under this case: {% for c in fam.children %}<b>{{ c.case_ref }}</b> ({{ c.role or "search" }}{% if c.review_here %}, reviewed there{% endif %}){% if not loop.last %}, {% endif %}{% endfor %}</p>{% endif %}
+
+  <h2 id="release">Release of {{ fam.main_ref }}</h2>
+  {% if error %}<div class="err">{{ error }}</div>{% endif %}
+  {% if rel.sent %}<div class="note"><b>Response sent.</b></div>
+  {% elif rel.deadline %}<div class="{{ 'err' if rel.days_left < 3 else 'note' }}">Due <b>{{ rel.deadline.strftime("%a %d %b %Y") }}</b> ({{ "%d day(s) left" % rel.days_left if rel.days_left >= 0 else "%d day(s) overdue" % -rel.days_left }}) unless an extension is recorded. If that is a weekend or bank holiday, the next working day. <b>{{ rel.left }}</b> step(s) left.</div>
+  {% else %}<div class="err">Deadline unknown: confirm the date the request was received below. <b>{{ rel.left }}</b> step(s) left.</div>{% endif %}
+  <table class="t">
+    <tr><th></th><th>From the case</th><th>Now</th></tr>
+    {% for r in rel.computed %}
+    <tr><td>{{ "✅" if r.done else "⬜" }}</td><td>{{ r.label }}</td>
+      <td class="small">{% if r.link and fam.review_ref == settings.case_ref %}<a href="{{ url_for('review.queue') if r.link == 'review' else url_for('review.report_page') }}">{{ r.detail }}</a>{% else %}{{ r.detail }}{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  {% if fam.review_ref != settings.case_ref %}<p class="muted small">Worked out from {{ fam.review_ref }}, where this request is reviewed.</p>{% endif %}
+  <h3>Release documents</h3>
+  {% set d = rel.documents %}
+  {% if not d.configured %}<div class="note">Set <span class="mono">DSAR_CASE_DOCS_ROOT</span> in <span class="mono">.env</span> to the folder holding each case's documents (for example your OneDrive DSAR folder) to check the prepared letter and reports.</div>
+  {% else %}
+  <p class="muted small">Templates: <span class="mono">{{ d.templates_dir }}</span> · prepared documents: <span class="mono">{{ d.docs_dir }}/Output</span> (read only)</p>
+  <table class="t">
+    <tr><th></th><th>Document</th><th>Prepared</th><th>Status</th></tr>
+    {% for r in d.rows %}
+    <tr><td>{{ "✅" if r.status == "ready" else "⬜" }}</td><td>{{ r.document }}<div class="muted small">{{ r.templates | join(", ") }}</div></td>
+      <td class="mono">{{ r.file or "–" }}</td>
+      <td><span class="pill {{ 'ok' if r.status == 'ready' else 'warn' }}">{{ r.status }}</span>
+        {% if r.left %}<div class="small">{{ r.left | length }} to complete: {{ r.left[:4] | join(" · ") }}{% if r.left | length > 4 %} …{% endif %}</div>{% endif %}</td></tr>
+    {% endfor %}
+    {% for e in d.enclosures %}
+    <tr><td>{{ "✅" if e.present else "⬜" }}</td><td>Enclosure: {{ e.name }}</td><td class="mono">{{ e.file or "–" }}</td><td><span class="pill {{ 'ok' if e.present else 'warn' }}">{{ "present" if e.present else "missing" }}</span></td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  <table class="t" style="margin-top:10px">
+    <tr><th></th><th>Confirmed by you</th><th>Recorded</th><th></th></tr>
+    {% for r in rel.manual %}
+    <tr><td>{{ "✅" if r.done else "⬜" }}</td><td>{{ r.label }}</td>
+      <td class="small">{% if r.value %}{{ r.value }}{% endif %}{% if r.reviewer %}<div class="muted">{{ r.reviewer }}, {{ r.at }} (audit #{{ r.seq }})</div>{% endif %}</td>
+      <td><form method="post" action="{{ url_for('main.release_check') }}" class="inline">
+        <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="item" value="{{ r.key }}">
+        {% if r.done %}<input type="hidden" name="done" value="0"><button class="btn sm">Undo</button>
+        {% else %}<input type="hidden" name="done" value="1"><input name="value" placeholder="{{ r.hint }}" style="width:14em"> <button class="btn sm">Confirm</button>{% endif %}
+      </form></td></tr>
+    {% endfor %}
+  </table>
+  <p class="muted small">Each confirmation, with what you enter and your name, goes in {{ fam.main_ref }}'s audit log. Undo adds a new entry; nothing is changed.</p>
 
   {% if info.problems %}
   <div class="err"><b>Audit log check:</b> {{ info.problems | join("; ") }}</div>

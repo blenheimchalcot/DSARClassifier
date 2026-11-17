@@ -6,7 +6,7 @@
 |---|---|---|
 | Mail viewer | `src/dsar/toolbox/mailviewer/` | Browsing a PST or MBOX: folders, messages, attachments, search. Saving messages and attachments into the case, or a mailbox to Excel |
 | Teams viewer | `src/dsar/toolbox/teams/` | Teams chats in a PST: every conversation and participant, read in the browser, saved as a PDF transcript |
-| Redaction | `src/dsar/toolbox/redaction/` | Deciding, element by element, what is released and what is redacted, and exporting a redacted copy |
+| Personal Data Reviewer | `src/dsar/toolbox/redaction/` | Deciding, element by element, what is extracted into the Personal Data Report and what is left out (formerly *Redaction*; a redacted copy can still be exported) |
 
 The Mail and Teams viewers started as the separate PSTViewer project and now live here. They share `src/dsar/toolbox/mailbox/` (PST and MBOX reading). The app itself is `src/dsar/webapp/`.
 
@@ -17,9 +17,9 @@ dsar serve                       # case-bound: uses DSAR_DATA_DIR (and its confi
 dsar serve --free                # free-standing: no case (see below)
 ```
 
-Options: `--config` (case config, if it isn't in the data dir), `--markup-folder DIR` (an extra folder for the redaction tool, repeatable), `--port`, `--no-browser`.
+Options: `--config` (case config, if it isn't in the data dir), `--markup-folder DIR` (an extra folder for the redaction tool, repeatable), `--cases-root DIR` (where the Cases page looks; default: the folder holding this case), `--port`, `--no-browser`.
 
-The terminal prints a one-off address with a token. Open it, then **sign in with your full name**: it is recorded with everything you decide or export. `Ctrl-C` stops the server. Restarting it gives a new address, so close the old tab. Only this machine can connect, and pages from other sites can't use the session (strict same-site cookie, a CSRF check on every change, and only `127.0.0.1` / `localhost` accepted as the host). Request lines are not printed, because they carry search terms and file names.
+The terminal prints a one-off address with a token. Open it, then **sign in with your full name**: it is recorded with everything you decide or export. Tick **Remember my name on this browser** and the next sign-in, even after a restart, is pre-filled: one click on *Continue as <name>*. It is never signed in silently, so whoever is at the keyboard confirms who is recorded. Untick it to forget the name. `Ctrl-C` stops the server. Restarting it gives a new address, so close the old tab. Only this machine can connect, and pages from other sites can't use the session (strict same-site cookie, a CSRF check on every change, and only `127.0.0.1` / `localhost` accepted as the host). Request lines are not printed, because they carry search terms and file names.
 
 ### Two modes
 
@@ -32,6 +32,73 @@ The terminal prints a one-off address with a token. Open it, then **sign in with
 | Open attachment in another app | Not offered (it would copy subject data out of the case) | Offered on macOS, from a private temp folder deleted on exit |
 
 Use free-standing mode only for work that isn't a case, such as checking an export's structure.
+
+## Main case, deeper searches and the release checklist
+
+A request can have a **main case** (its reference, e.g. `DSAR-20261020-1`) and **deeper searches** under it (e.g. `DSAR-20261020-1-1`). A deeper search says so in `data/case.json`: `{"parent": "<main CASE-REF>", "role": "deeper search", "review_here": true}`. Cases lists it under its main case. With `review_here`, the request's Review and Report are worked in that search. The main case's Review and Report pages point there. The report is named with the main case's reference and saved in the main case's `output/personal_data_report/`, and each build is logged in both cases.
+
+The **case page** shows **Release of <main case>**: what is left before the response can go out.
+
+- **Deadline:** one calendar month from the date received (the same date next month, or that month's last day). If it falls on a weekend or bank holiday, the next working day.
+- **From the case:** items 7+ decided; passages selected for workbook *Disclose with redactions*; whole-passage extracts narrowed; Personal Data Reviewer folders fully decided; a final (not draft) report built.
+- **Release documents:** every template in `DSAR_CASE_DOCS_ROOT/<main case>/Templates` (else the shared `Templates/`) is a document the response needs. The prepared copy in `DSAR_CASE_DOCS_ROOT/<main case>/Output` is shown as *missing*, *unchanged template*, *to complete* (`[placeholders]`, INSERT guidance, "confirm before sending", "delete this …"), or *ready*. The Personal Data Report counts the app's latest build first. Every enclosure listed under *Enclosed documents* in the letter must be there. Files are only read. OneDrive online-only files are never opened from this page, because that would download them; keep the case folder on the device to have them checked.
+- **Confirmed by you:** date received, identity, extension, controller, search scope, open items, letter, Exemptions Report, Data not in Scope, enclosures, sent. Each Confirm or Undo is an audit entry (`release check`) in the main case with your name and what you entered.
+
+Set `DSAR_CASE_DOCS_ROOT` in `.env` (e.g. the OneDrive `DSAR` folder holding `<CASE-REF>/Templates` and `<CASE-REF>/Output`).
+
+## Review and Personal Data Report
+
+**Review** replaces the review workbook for deciding on classified items. **Report** builds the Personal Data Report from those decisions and the redaction tool. Both need a case with a `dsar.sqlite`; the app never creates one.
+
+### Review queue
+
+Lists every item the model scored 7 or more (change *Min score* to see lower ones), plus any item already decided, under *To review*, *Needs passages* and *Done*. Search looks in subject, sender, file and text. An item page shows the whole chunk with the model's evidence highlighted (and whether that quote is really in the text), its metadata and source, the other chunks of the same item or thread, and every decision made on it.
+
+Decisions:
+
+| Decision | Needs | Goes to |
+|---|---|---|
+| Extract to Personal Data Report | One or more passages selected (*Extract selection*, or *Extract whole passage*) | The report, as text only |
+| Release in full | | The disclosure package (listed on the Report page; package building is still to do) |
+| Release in full with redactions | One or more passages selected to redact, each with a reason | As above |
+| Withhold (exemption applies) | The exemption | Not disclosed |
+| Not the subject's personal data | | Not disclosed |
+
+Optional: the score assessment and your own score, and notes (needed when a reason is *Other*). **Save and next** validates at once and moves to the next item to review. Decisions are append-only in `decisions` and `decision_spans` (dsar.sqlite); the newest one is current, and earlier ones stay in the item's history. Each passage is a character range of the chunk text, stored with the text's SHA-256: if the text changes, the decision no longer applies and the item is listed as outstanding. Every decision is written to the audit log (`review decide`) with your name, the decision, the number of passages and the text's hash. The model's score is never changed.
+
+Workbook decisions (`dsar review import`) keep their wording and count as made. For the report, a workbook *Disclose* is taken as the whole passage and flagged so it can be narrowed. A workbook *Disclose with redactions* recorded what to redact only in notes, so it is listed under *Needs passages* until the passages are selected in the app. The workbook commands still work as a fallback; `dsar review status` counts decisions from both.
+
+### Personal Data Report
+
+The Report page shows what the report holds now, what is outstanding, a preview of every extract with its sources, and earlier builds. **Build report** fills a copy of the controller's template:
+
+- Template: `Personal Data Report.docx` from the case's own `data/templates/` folder if there is one (a copy tailored for the case), else from `Templates/` in the project folder or `DSAR_TEMPLATES_DIR`. The intro is kept and the *INSERT DATA REPORT* guidance and *SAMPLE TABLE* label are removed. The generic template's sample table becomes *Data Subject* then one *Extracted data N* row per extract. A tailored template keeps every row as written. The extracts go in *Extract N* rows after the row whose label mentions extracts or "mention you", and that row's `[placeholder]` is replaced with a pointer to them. Any other `[placeholder]` left in the template keeps the build a DRAFT until it is completed in Word.
+- Redaction folders: every folder under `output/` with `.txt` files counts, unless it is left out on the Report page. Leaving one out needs a reason and is logged (`report folder`) with your name. The page notes a folder whose files are all exact copies of files in another folder.
+- Contents: passages extracted in Review, workbook *Disclose* passages, and every passage released in the redaction tool's folders. Text only. Identical extracts are merged, so each piece of data appears once. Ordered by the source's date (an item's sent date, or a `YYYY-MM-DD` in a redaction file's name), undated last.
+- Outstanding (makes the build a **DRAFT**, in the file name and in red on the first page): items 7+ not reviewed, workbook *Disclose with redactions* without passages, text changed since a decision, redaction-tool elements not yet decided, or no data subject name.
+- Output, read-only in `output/personal_data_report/`: `Personal_Data_Report_<case>_<UTC>[_DRAFT].docx` and `personal_data_report_register_<case>_<UTC>[_DRAFT].csv`. The register is private: every source of every extract (origin, date, type, sender, subject, source file, item, position, text hash, decision, reviewer). Both hashes and the template's are logged (`report personal-data`).
+
+The same build runs from the terminal with `dsar personal-data-report --reviewer "<your name>"`. Edit the Word copy for final wording if needed, save it as PDF and record what was sent (OPERATIONS). *Download copy* gives a copy of a build; downloads are logged too.
+
+## Cases page (switching case)
+
+**Cases** in the top bar lists every case under the cases root (each `<CASE-REF>/data` with an `output/` folder; folders starting `_` are skipped), with its data subject and the state of its audit log:
+
+| State | Meaning | Opening it |
+|---|---|---|
+| chain intact | Hash-chained `AUDIT_LOG.jsonl`, chain verified | Opens |
+| chain problems | `AUDIT_LOG.jsonl` whose chain check fails | Opens; the problems are recorded in the case-open entry. Investigate before relying on the case |
+| legacy | Run before the platform logged itself: a hand-written `AUDIT_LOG.md` only, or no log | Needs a tick to confirm. It starts the case's hash-chained log; the first entry says earlier work isn't in it and records the SHA-256 of the existing `AUDIT_LOG.md`, which is appended to, never rewritten |
+
+Only cases found there can be opened (the browser never sends a path). Switching:
+
+- writes `toolbox app case-close` in the case left and `toolbox app case-open` in the case opened, under the signed-in reviewer (with the config's SHA-256);
+- closes open mailboxes and uses only the new case's own `data/config.yaml`. `--config` and `--markup-folder` belong to the starting case and are not carried over;
+- rotates the session's CSRF value: a tab still showing the previous case gets *409, reload the page* on any change, and nothing is done.
+
+`serve` start and end stay in the starting case's log. If the app is stopped while another case is open, that case gets a `case-close` entry too.
+
+Legacy cases may lack what the toolbox expects (a mailbox opens only from a `dsar manifest`; stage status comes from the hash-chained log only). Treat them as read-mostly until their state has been checked.
 
 ## Case page
 
@@ -53,7 +120,7 @@ Shows each pipeline stage (manifest, attachments, ingest, provenance, ingest QA,
 - Conversations that include the data subject are starred. **People** lists each person with messages sent and received and their number of 1:1 partners. Click a person to filter the conversations. Meeting chats can list hundreds of people, because Purview records the whole meeting roster.
 - **Save PDF to case** writes a transcript: participants, thread ID, date range, the source file and its SHA-256, who produced it and when, then every message in time order. A message with no text (an image, call or reaction) is shown as such, never left out.
 
-## Redaction
+## Personal Data Reviewer (formerly Redaction)
 
 ### Preparing a folder
 

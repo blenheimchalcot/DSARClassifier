@@ -13,6 +13,9 @@
   <a class="brand" href="{{ url_for('main.home') }}">{{ settings.case_ref or "DSAR" }}<small>dsar {{ version }}</small></a>
   <nav>
     <a href="{{ url_for('main.home') }}" class="{{ 'on' if request.endpoint == 'main.home' }}">Case</a>
+    {% if settings.case_bound %}<a href="{{ url_for('main.cases_page') }}" class="{{ 'on' if request.endpoint == 'main.cases_page' }}">Cases</a>
+    <a href="{{ url_for('review.queue') }}" class="{{ 'on' if request.endpoint in ('review.queue', 'review.item') }}">Review</a>
+    <a href="{{ url_for('review.report_page') }}" class="{{ 'on' if request.endpoint == 'review.report_page' }}">Report</a>{% endif %}
     <a href="{{ url_for('main.toolbox_index') }}" class="{{ 'on' if request.endpoint == 'main.toolbox_index' }}">Toolbox</a>
     {% for t in tools %}
     <a href="{{ url_for(t.endpoint) }}" class="{{ 'on' if request.blueprint == t.blueprint_name }}">{{ t.name }}</a>

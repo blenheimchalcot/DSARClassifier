@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Review{% endblock %}
+{% block content %}
+<h1>Review</h1>
+<p class="muted small">Items the model scored {{ min_score }} or more, plus any item already decided. Decisions are saved as you make them, under your name, and never change the model's score. Decisions imported from review workbooks count as made.</p>
+<form class="filters" method="get">
+  {% for st in statuses %}
+  <a class="btn sm{{ ' primary' if status == st }}" href="{{ url_for('review.queue', status=st, min=min_score, q=q) }}">{{ st }} ({{ data.counts[st] }})</a>
+  {% endfor %}
+  <a class="btn sm{{ ' primary' if not status }}" href="{{ url_for('review.queue', status='', min=min_score, q=q) }}">All ({{ data.total }})</a>
+  <input type="hidden" name="status" value="{{ status }}">
+  <label class="small">Min score <input type="number" name="min" min="0" max="10" value="{{ min_score }}" style="width:4em"></label>
+  <input type="search" name="q" value="{{ q }}" placeholder="Search subject, sender, text" style="min-width:16em">
+  <button class="btn sm">Filter</button>
+</form>
+<table class="t">
+  <tr><th>Score</th><th>Item</th><th>Date</th><th>Evidence</th><th>Status</th><th>Decision</th></tr>
+  {% for r in data.rows %}
+  <tr>
+    <td><b>{{ r.score if r.score is not none else "–" }}</b></td>
+    <td><a href="{{ url_for('review.item', chunk_id=r.chunk_id) }}">{{ r.title or "(no title)" }}</a>
+      <div class="muted small">{{ r.source_type }}{% if r.from %} · {{ r.from }}{% endif %}</div>
+      <div class="small">{{ r.reason[:160] }}</div></td>
+    <td class="small">{{ r.date[:10] }}</td>
+    <td><span class="pill {{ 'ok' if r.evidence_check == 'yes' else 'warn' }}">{{ r.evidence_check }}</span></td>
+    <td><span class="pill {{ 'ok' if r.status == 'Done' else ('warn' if r.status == 'Needs passages' else '') }}">{{ r.status }}</span></td>
+    <td class="small">{{ r.decision }}{% if r.reviewer %}<div class="muted">{{ r.reviewer }}{% if r.decision_source != 'app' %} · {{ r.decision_source }}{% endif %}</div>{% endif %}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="6" class="muted">Nothing here.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

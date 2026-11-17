@@ -1026,6 +1026,43 @@ def report_cmd(db_path: str | None, out_path: str | None, run: audit.Run) -> Non
     run.hash_file("dsar.sqlite", db_path)
 
 
+@main.command(name="personal-data-report")
+@click.option("--config", "config_path", default=None,
+              help="Case config, for the data subject's name (default: config.yaml in $DSAR_DATA_DIR).")
+@click.option("--reviewer", required=True, help="Your full name: recorded with the build.")
+@_audited("personal-data-report")
+def personal_data_report_cmd(config_path: str | None, reviewer: str, run: audit.Run) -> None:
+    """Build the Personal Data Report and its private register (same as Report in `dsar serve`).
+
+    Uses review decisions and every redaction-tool folder under output/. DRAFT while
+    anything is outstanding. See docs/TOOLBOX.md.
+    """
+    from dsar import personal_data_report, webapp
+    from dsar.toolbox.redaction import web as redaction_web
+    from dsar.webapp import cases
+
+    data_dir = _data_dir()
+    settings = webapp.Settings.for_case(data_dir, Path(config_path) if config_path else None)
+    db_path = data_dir / "dsar.sqlite"
+    if not db_path.is_file():
+        raise click.ClickException(f"No dsar.sqlite in {data_dir}")
+    folders = redaction_web.case_folders(settings.output_dir)
+    with db.connect(db_path) as conn:
+        db.init_schema(conn)
+        fam = cases.family(settings)
+        result = personal_data_report.build(conn, settings.output_dir, fam.main_ref, settings.subject_name,
+                                            folders, reviewer, report_output_dir=fam.main_dir / "output")
+    click.echo(f"{'DRAFT ' if result['draft'] else ''}Personal Data Report: {result['report']}")
+    click.echo(f"  {result['extracts']} extracts ({result['from_review']} from review, "
+               f"{result['from_redaction']} from redaction), {result['outstanding']} outstanding, "
+               f"{len(result['placeholders_left'])} template placeholder(s) left")
+    click.echo(f"  Register (private): {result['register']}")
+    run.data.update(report=result["report"], draft=result["draft"], extracts=result["extracts"],
+                    outstanding=result["outstanding"])
+    if result["draft"]:
+        run.warn("built as DRAFT")
+
+
 @main.command(name="manifest")
 @click.option("--stage", default=None,
               help="Label for this hashing pass, e.g. 'Purview ZIPs before extraction'.")
@@ -1300,9 +1337,12 @@ def markup_score_cmd(folder: str, config_path: str, system_prompt: str, run: aud
 @click.option("--markup-folder", "markup_folders", multiple=True,
               type=click.Path(exists=True, file_okay=False, path_type=Path),
               help="Extra folder of .txt files for the redaction tool (repeatable).")
+@click.option("--cases-root", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None,
+              help="Folder of <CASE-REF>/data case folders for the Cases page (default: the one holding this case).")
 @click.option("--port", type=int, default=0, help="Port on 127.0.0.1 (default: any free port).")
 @click.option("--no-browser", is_flag=True, help="Print the address instead of opening it.")
-def serve_cmd(config_path: str | None, free: bool, markup_folders: tuple[Path, ...], port: int, no_browser: bool) -> None:
+def serve_cmd(config_path: str | None, free: bool, markup_folders: tuple[Path, ...], cases_root: Path | None,
+              port: int, no_browser: bool) -> None:
     """Open the case web app and toolbox on this machine only (127.0.0.1). Ctrl-C to stop.
 
     Case-bound by default (needs DSAR_DATA_DIR): mailboxes open only from the input
@@ -1324,6 +1364,8 @@ def serve_cmd(config_path: str | None, free: bool, markup_folders: tuple[Path, .
                                        "Check DSAR_DATA_DIR, or use --free.")
         settings = webapp.Settings.for_case(data_dir, Path(config_path) if config_path else None,
                                             markup_folders=list(markup_folders))
+        if cases_root:
+            settings.cases_root = cases_root
         ctx = audit.run(data_dir / "output", "serve", {"config_path": config_path, "port": port,
                                                        "markup_folders": [str(p) for p in markup_folders]})
     with ctx as run:
@@ -1342,6 +1384,11 @@ def serve_cmd(config_path: str | None, free: bool, markup_folders: tuple[Path, .
         finally:
             server.server_close()
             server.app.extensions["dsar_mailboxes"].close_all()
+            if run is not None and settings.data_dir != data_dir:
+                # Switched case in the app: the case left open records the stop too.
+                audit.AuditLog(settings.output_dir).append("toolbox", "toolbox app case-close",
+                                                           {"reason": "server stopped", "serve_run": run.run_id})
+                run.data["closed_in_case"] = settings.case_ref
 
 
 @audit_group.command(name="note")
