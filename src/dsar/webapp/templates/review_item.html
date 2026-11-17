@@ -77,7 +77,7 @@
 </ul>
 {% endif %}
 
-<script type="application/json" id="item-data">{{ {"content": it.content, "sha": it.content_sha256, "evidence": it.evidence_spans,
+<script type="application/json" id="item-data">{{ {"content": it.screen_content, "sha": it.content_sha256, "evidence": it.evidence_spans,
   "current": it.current, "decide_url": url_for('review.decide', chunk_id=it.chunk_id),
   "EXTRACT": EXTRACT, "RELEASE_REDACTED": RELEASE_REDACTED, "WITHHOLD": WITHHOLD} | tojson }}</script>
 {% endblock %}

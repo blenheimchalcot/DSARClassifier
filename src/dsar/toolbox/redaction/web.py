@@ -10,6 +10,7 @@ with the signed-in reviewer as the reviewer. Folders offered:
 import hashlib
 import html
 import json
+from collections import Counter
 from pathlib import Path
 
 from flask import Blueprint, abort, current_app, jsonify, redirect, render_template, request, url_for
@@ -129,10 +130,50 @@ def page(fid):
         "<body>", bar, 1)
 
 
+def _repeats(f: markup.Folder, docs: list[dict]) -> dict:
+    """This folder's undecided elements that repeat a decision made in any of the request's folders."""
+    others = [(p, docs if p == f.folder else markup.Folder(p, "", None).docs()) for p in folders().values()]
+    if all(p != f.folder for p, _ in others):
+        others.append((f.folder, docs))
+    return markup.repeats_for(docs, markup.repeat_sources(others))
+
+
 @bp.route("/f/<fid>/api/docs")
 def docs(fid):
     f = _folder(fid)
-    return jsonify({"reviewer": f.reviewer, "docs": f.docs(), "chain_ok": f.events.verify()})
+    d = f.docs()
+    return jsonify({"reviewer": f.reviewer, "docs": markup.screen_docs(d), "chain_ok": f.events.verify(),
+                    "repeats": _repeats(f, d)})
+
+
+@bp.route("/f/<fid>/api/apply-repeats", methods=["POST"])
+def apply_repeats(fid):
+    """Record, for each repeat, the same decision as the element it repeats, under the signed-in reviewer."""
+    f = _folder(fid)
+    if not f.reviewer:
+        return jsonify({"error": "sign in first"}), 400
+    d = f.docs()
+    shas = {x["name"]: x["sha256"] for x in d}
+    applied, failed = [], []
+    for name, els in _repeats(f, d).items():
+        for el_id, info in els.items():
+            body = {"file": name, "sha256": shas[name], "action": "decide", "element": el_id,
+                    "decision": info["decision"], "reason": info.get("reason"), "note": info.get("note"),
+                    "redactions": info.get("redactions"), "copied_from": f"{info['from']}#{info['element']}"}
+            try:
+                f.act(body)
+                applied.append({"file": name, "element": el_id, "decision": info["decision"], "copied_from": body["copied_from"]})
+            except (KeyError, ValueError) as exc:
+                failed.append({"file": name, "element": el_id, "error": str(exc)})
+    data = {"folder": str(f.folder), "applied": len(applied), "failed": len(failed),
+            "decisions": dict(Counter(a["decision"] for a in applied)),
+            "events_sha256": audit.sha256_file(f.events.path) if f.events.path.exists() else None}
+    records.log(TOOL, "apply-repeats", data)
+    s = current_app.config["DSAR"]
+    owner = _owner(f.folder)
+    if owner is not None and owner != s.output_dir:
+        audit.AuditLog(owner).append("toolbox", f"toolbox {TOOL} apply-repeats", {"reviewer": records.reviewer(), **data})
+    return jsonify({**data, "errors": failed[:20]})
 
 
 @bp.route("/f/<fid>/api/act", methods=["POST"])

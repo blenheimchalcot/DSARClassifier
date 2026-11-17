@@ -311,6 +311,8 @@ class Folder:
             redactions.append({"id": secrets.token_hex(6), "start": start, "end": end, "reason": r["reason"],
                                "note": note, "reviewer": self.reviewer, "ts": _now(), "sha256": sha})
         event.update(decision=decision, redactions=redactions)
+        if body.get("copied_from"):
+            event["copied_from"] = str(body["copied_from"])[:300]     # "Apply the same decisions to repeats"
         return self.events.append(event)
 
     def export(self, name: str) -> tuple[str, Path]:
@@ -366,6 +368,112 @@ class Folder:
 
 def _norm(text: str) -> str:
     return re.sub(r"\W+", " ", text).strip().lower()
+
+
+_ASTRAL = re.compile("[\U00010000-\U0010FFFF]")
+SCREEN_PLACEHOLDER = "\u25a1"   # □
+
+
+def screen_text(text: str) -> str:
+    """Text for the browser, one unit per character. Positions here are Python characters, but the
+    browser counts an emoji (or other character beyond U+FFFF) as two, which shifted everything after
+    it: text was cut short on screen and a cut could land two characters off. Each such character is
+    shown as □ instead; the file and every position stay exactly as they are."""
+    return _ASTRAL.sub(SCREEN_PLACEHOLDER, text)
+
+
+def screen_docs(docs: list[dict]) -> list[dict]:
+    return [{**d, "text": screen_text(d["text"])} for d in docs]
+
+
+REPEAT_MIN_CHARS = 20          # below this, a repeat must be exactly the same text (not just the same words)
+
+
+def _element_raw(text: str, el: dict) -> str:
+    return "\n".join(text[a:b] for a, b in el["parts"]).strip()
+
+
+DUPLICATE = "Duplicate – already in the Personal Data Report"
+_DUP_REASONS = {DUPLICATE, "Already reviewed and assessed"}
+
+
+def repeat_sources(folders: list[tuple[Path, list[dict]]]) -> dict[str, dict]:
+    """What a repeat of each decided text should get, keyed by exact text ("=") and normalised text ("~").
+
+    Follows the reviewer's own practice: text extracted somewhere (or only ever left out as a
+    duplicate) is in the report, so a repeat is left out as a duplicate. Text left out for one
+    real reason gets that reason. Text extracted in one place and left out for a real reason in
+    another, or left out for different reasons, is ambiguous: never copied. A partial decision is
+    copied only when every partial copy made the same cuts.
+    """
+    copies: dict[str, list[dict]] = {}
+    for path, docs in folders:
+        for d in docs:
+            for el in d["elements"]:
+                dec = d["decisions"].get(el["id"])
+                raw = _element_raw(d["text"], el)
+                key = _norm(raw)
+                if not dec or not key:
+                    continue
+                c = {"from": f"{path.name}/{d['name']}", "element": el["id"], "decision": dec["decision"],
+                     "redactions": dec["redactions"], "start": el["parts"][0][0], "single": len(el["parts"]) == 1}
+                for k in ("=" + raw, "~" + key) if len(key) >= REPEAT_MIN_CHARS else ("=" + raw,):
+                    copies.setdefault(k, []).append(c)
+    out = {}
+    for k, cs in copies.items():
+        released = [c for c in cs if c["decision"] == "release"]
+        full = [c for c in cs if c["decision"] == "redact_full"]
+        partial = [c for c in cs if c["decision"] == "redact_partial"]
+        real = {r["reason"] for c in full for r in c["redactions"]} - _DUP_REASONS
+        if partial:
+            cuts = {tuple((r["start"] - c["start"], r["end"] - c["start"], r["reason"]) for r in c["redactions"])
+                    for c in partial}
+            ok = len(cuts) == 1 and not released and not real and all(c["single"] for c in partial)
+            out[k] = {**partial[0], "kind": "partial"} if ok else {"ambiguous": True}
+        elif released and real:
+            out[k] = {"ambiguous": True}                     # extracted here, left out for a real reason there
+        elif released or not real:
+            src = (released or full)[0]
+            out[k] = {**src, "kind": "duplicate", "decision": "redact_full",
+                      "redactions": [{"reason": DUPLICATE, "note": f"Same text {'extracted' if released else 'left out as a duplicate'} in {src['from']}"}]}
+        elif len(real) == 1:
+            src = next(c for c in full if {r["reason"] for r in c["redactions"]} & real)
+            out[k] = {**src, "kind": "same"}
+        else:
+            out[k] = {"ambiguous": True}
+    return out
+
+
+def repeats_for(docs: list[dict], sources: dict[str, dict]) -> dict[str, dict]:
+    """For each file, its undecided elements that repeat a decided one: {file: {element id: decision to copy}}.
+
+    A partial decision is copied only onto exactly the same text (its cut positions move with it).
+    """
+    out: dict[str, dict] = {}
+    for d in docs:
+        for el in d["elements"]:
+            if el["id"] in d["decisions"]:
+                continue
+            raw = _element_raw(d["text"], el)
+            key = _norm(raw)
+            if not key:
+                continue
+            exact = sources.get("=" + raw)
+            src = exact or (sources.get("~" + key) if len(key) >= REPEAT_MIN_CHARS else None)
+            if not src or src.get("ambiguous"):
+                continue
+            info = {"from": src["from"], "element": src["element"], "decision": src["decision"], "kind": src["kind"]}
+            if src["decision"] == "redact_full":
+                r = src["redactions"][0]
+                info.update(reason=r["reason"], note=r.get("note", ""))
+            else:
+                if not (exact and len(el["parts"]) == 1):
+                    continue
+                shift = el["parts"][0][0] - src["start"]
+                info["redactions"] = [{"start": r["start"] + shift, "end": r["end"] + shift, "reason": r["reason"],
+                                       "note": r.get("note", "")} for r in src["redactions"]]
+            out.setdefault(d["name"], {})[el["id"]] = info
+    return out
 
 
 def extract_text(text: str, el: dict, redactions: list[dict]) -> str:
@@ -538,7 +646,7 @@ class _Handler(BaseHTTPRequestHandler):
         if url.path == "/":
             return self._send(200, APP_PAGE.replace("__REASONS__", json.dumps(REASONS)), "text/html")
         if url.path == "/api/docs":
-            return self._send(200, json.dumps({"reviewer": self.folder.reviewer, "docs": self.folder.docs(),
+            return self._send(200, json.dumps({"reviewer": self.folder.reviewer, "docs": screen_docs(self.folder.docs()),
                                                "chain_ok": self.folder.events.verify()}))
         if url.path == "/api/extracts":
             return self._send(200, json.dumps(self.folder.export_extracts()))
@@ -640,13 +748,13 @@ details.more .menu button{display:block;width:100%;text-align:left;border:0;back
 const TOKEN=new URLSearchParams(location.search).get("token")||(document.querySelector('meta[name="csrf"]')||{}).content,REASONS=__REASONS__,SUBJECT=(new URLSearchParams(location.search).get("subject")||"").toLowerCase();
 const COLOURS=["#2f5d8a","#2e7d4f","#8a4b9c","#b5651d","#1f7a8c"];
 const LABEL={release:"Extracted",redact_full:"Left out",redact_partial:"Extracted in part",pending:"Not reviewed"};
-let DOCS=[],cur=0,view="original",q="",edit=null,full=null,split=null,minScore=-1,focus=null,lastReason=REASONS[0],doneOpen=false,openRow=null;
+let DOCS=[],cur=0,view="original",q="",edit=null,full=null,split=null,minScore=-1,focus=null,lastReason=REASONS[0],doneOpen=false,openRow=null,REP={},repOpen=false;
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const reasonOpts=()=>REASONS.map(x=>`<option>${esc(x)}</option>`).join("");
 function toast(m){const t=document.getElementById("toast");t.textContent=m;t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",3000)}
-async function load(keep){const j=await (await fetch("api/docs?token="+TOKEN)).json();DOCS=j.docs;document.getElementById("who").innerHTML="Reviewer: <b>"+esc(j.reviewer)+"</b>"+(j.chain_ok?"":" · <span style='color:var(--red)'>event log chain broken</span>");if(!keep){cur=0;const P=new URLSearchParams(location.search),F=P.get("file"),E=P.get("el");if(F){const i=DOCS.findIndex(d=>d.name===F);if(i>=0){cur=i;if(E){openRow=E;focus=E}}}}nav();render();if(!keep&&openRow)setTimeout(()=>goTo(openRow),60);if(!focus){const d=DOCS[cur];focus=(d.elements.find(e=>!d.decisions[e.id])||{}).id;render()}}
+async function load(keep){const j=await (await fetch("api/docs?token="+TOKEN)).json();DOCS=j.docs;REP=j.repeats||{};document.getElementById("who").innerHTML="Reviewer: <b>"+esc(j.reviewer)+"</b>"+(j.chain_ok?"":" · <span style='color:var(--red)'>event log chain broken</span>");if(!keep){cur=0;const P=new URLSearchParams(location.search),F=P.get("file"),E=P.get("el");if(F){const i=DOCS.findIndex(d=>d.name===F);if(i>=0){cur=i;if(E){openRow=E;focus=E}}}}nav();render();if(!keep&&openRow)setTimeout(()=>goTo(openRow),60);if(!focus){const d=DOCS[cur];focus=(d.elements.find(e=>!d.decisions[e.id]&&!(REP[d.name]||{})[e.id])||{}).id;render()}}
 async function act(body){Object.assign(body,{file:DOCS[cur].name,sha256:DOCS[cur].sha256});const r=await fetch("api/act",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify(body)});const j=await r.json();if(!r.ok){toast(j.error);return false}return true}
-function nav(){const f=document.getElementById("files");f.innerHTML="";DOCS.forEach((d,i)=>{const n=Object.keys(d.decisions).length,b=document.createElement("button");b.className=i===cur?"on":"";b.innerHTML=esc(d.name.replace(/\.txt$/,"").replace(/_/g," "))+`<span class="prog">${n}/${d.elements.length} reviewed · ${d.redactions.length} passage(s) left out</span>`;b.onclick=()=>{if(edit&&!confirm("Discard unsaved marks?"))return;cur=i;q="";edit=null;full=null;split=null;focus=(d.elements.find(e=>!d.decisions[e.id])||{}).id;nav();render();scrollTo(0,0)};f.appendChild(b)})}
+function nav(){const f=document.getElementById("files");f.innerHTML="";DOCS.forEach((d,i)=>{const n=Object.keys(d.decisions).length,nr=Object.keys(REP[d.name]||{}).length,b=document.createElement("button");b.className=i===cur?"on":"";b.innerHTML=esc(d.name.replace(/\.txt$/,"").replace(/_/g," "))+`<span class="prog">${n}/${d.elements.length} reviewed · ${d.redactions.length} passage(s) left out${nr?` · ${nr} repeat(s)`:""}</span>`;b.onclick=()=>{if(edit&&!confirm("Discard unsaved marks?"))return;cur=i;q="";edit=null;full=null;split=null;focus=(d.elements.find(e=>!d.decisions[e.id]&&!(REP[d.name]||{})[e.id])||{}).id;nav();render();scrollTo(0,0)};f.appendChild(b)})}
 function hl(s){let e=esc(s);if(q){const re=new RegExp("("+q.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+")","gi");e=e.replace(re,"<mark>$1</mark>")}return e}
 // One part [a,b] of an element, with redactions rs; cls is the class for released text
 function piece(d,a,b,rs,cls,editable){let out="",pos=a;const seg0=(x,y)=>`<span data-s="${x}" class="${cls}">${hl(d.text.slice(x,y))}</span>`;
@@ -694,21 +802,26 @@ function render(){const d=DOCS[cur],m=document.getElementById("main");if(!d){m.i
   cards[el.id]=`<div class="el ${st} ${subj?"subj":""} ${editing?"editing":""} ${splitting?"editing splitting":""} ${focus===el.id?"focus":""}" data-el="${el.id}" style="--c:${c}"><div class="h">${name}${chip}${ctl}</div>${top}${prior?`<div class="prior">Decided before this element was split: ${prior}. Please decide again.</div>`:""}<div class="txt">${body}</div>${form}</div>`}
  // Processed elements collapse into one bar at the top; the rest follow in document order.
  const active=id=>edit?.el===id||full===id||split?.el===id||openRow===id;
- const done=shown.filter(el=>d.decisions[el.id]),todo=shown.filter(el=>!d.decisions[el.id]);
+ const R=REP[d.name]||{},done=shown.filter(el=>d.decisions[el.id]),todo=shown.filter(el=>!d.decisions[el.id]&&!R[el.id]),reps=shown.filter(el=>!d.decisions[el.id]&&R[el.id]);
  if(done.length){const cnt={};done.forEach(el=>{const k=d.decisions[el.id].decision;cnt[k]=(cnt[k]||0)+1});
   h+=`<div class="done"><button class="dbar" id="dtoggle">${doneOpen?"▾":"▸"} Processed: ${done.length}<span class="t">${Object.entries(cnt).map(([k,v])=>v+" "+LABEL[k].toLowerCase()).join(" · ")}</span><span class="sp"></span><span class="t">${doneOpen?"Hide":"Show to review or change"}</span></button>`;
   h+=doneOpen?done.map(el=>active(el.id)?cards[el.id]:row(d,el)).join(""):done.filter(el=>active(el.id)).map(el=>cards[el.id]).join("");
   h+=`</div>`}
- h+=todo.length?todo.map(el=>cards[el.id]).join(""):`<p class="alldone">Every element ${q||minScore>=0?"shown here ":""}is reviewed. Open “Processed” to check them, or export the redacted copy.</p>`;
+ if(reps.length){h+=`<div class="done rep"><div class="dbar"><button class="btn primary" id="applyrep">Apply the same decisions to ${reps.length} repeat(s)</button><span class="t">Same text as elements you have already decided</span><span class="sp"></span><button class="btn" id="rtoggle">${repOpen?"Hide":"Show them"}</button></div>`;
+  h+=repOpen?reps.map(el=>active(el.id)?cards[el.id]:`<div class="row" data-row="${el.id}"><span class="badge pending">Repeat</span><span class="t">${R[el.id].kind==="duplicate"?"Duplicate of "+esc(R[el.id].from):esc(R[el.id].from)+": "+LABEL[R[el.id].decision]+(R[el.id].reason?" ("+esc(R[el.id].reason)+")":"")}</span> ${esc(el.parts.map(([a,b])=>d.text.slice(a,b)).join(" ").replace(/\s+/g," ").slice(0,140))}</div>`).join(""):reps.filter(el=>active(el.id)).map(el=>cards[el.id]).join("");
+  h+=`</div>`}
+ h+=todo.length?todo.map(el=>cards[el.id]).join(""):reps.length?`<p class="alldone">Only repeats are left: apply the same decisions above, or open one to decide it differently.</p>`:`<p class="alldone">Every element ${q||minScore>=0?"shown here ":""}is reviewed. Open “Processed” to check them, or export the redacted copy.</p>`;
  m.innerHTML=h;
  if(edit){const s=document.getElementById("er");if(s)s.value=edit.reason||REASONS[0]}
  const qi=document.getElementById("q");qi.oninput=()=>{q=qi.value;const p=qi.selectionStart;render();const n=document.getElementById("q");n.focus();n.setSelectionRange(p,p)};
  m.querySelectorAll(".toggle button").forEach(b=>b.onclick=()=>{view=b.dataset.v;render()});
  const dt=document.getElementById("dtoggle");if(dt)dt.onclick=()=>{doneOpen=!doneOpen;openRow=null;render()};
+ const rt=document.getElementById("rtoggle");if(rt)rt.onclick=()=>{repOpen=!repOpen;openRow=null;render()};
+ const ar=document.getElementById("applyrep");if(ar)ar.onclick=async()=>{ar.disabled=true;const r=await fetch("api/apply-repeats",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:"{}"});const j=await r.json();if(!r.ok){toast(j.error||"Not applied");ar.disabled=false;return}toast(`Applied ${j.applied} decision(s)${j.failed?`, ${j.failed} need deciding by hand`:""}`);await load(true);nav()};
  m.querySelectorAll(".row").forEach(r=>r.onclick=()=>{openRow=r.dataset.row;focus=openRow;render()});
  document.getElementById("min").onchange=ev=>{minScore=+ev.target.value;render()};
  document.getElementById("exp").onclick=()=>window.open("export?token="+TOKEN+"&file="+encodeURIComponent(d.name),"_blank");
- document.getElementById("all").onclick=async()=>{const todo=d.elements.filter(e=>!d.decisions[e.id]);if(!todo.length||!confirm(`Extract ${todo.length} element(s) not yet reviewed, as they are?`))return;for(const e of todo)if(!await act({action:"decide",element:e.id,decision:"release"}))break;await load(true)};
+ document.getElementById("all").onclick=async()=>{const todo=d.elements.filter(e=>!d.decisions[e.id]&&!(REP[d.name]||{})[e.id]);if(!todo.length||!confirm(`Extract ${todo.length} element(s) not yet reviewed, as they are?`))return;for(const e of todo)if(!await act({action:"decide",element:e.id,decision:"release"}))break;await load(true)};
  m.querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const id=b.closest(".el").dataset.el,a=b.dataset.a;
   if(a==="approve"){if(DOCS[cur].decisions[id]?.decision==="release")return advance(id);if(await act({action:"decide",element:id,decision:"release"})){await load(true);advance(id)}}
   else if(a==="full"){if(edit)return toast("Save or cancel the element you are marking first");focus=id;full=id;render()}

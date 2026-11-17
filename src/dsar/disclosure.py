@@ -178,6 +178,8 @@ def item(conn: sqlite3.Connection, chunk_id: str) -> dict | None:
             "evidence_check": evidence.verify(r["score"], r["evidence"], content, r["subject"]),
             "evidence_spans": review.evidence_spans(content, r["evidence"] or ""),
             "content": content, "content_sha256": content_sha256(content),
+            # One unit per character in the browser, so selected positions are the content's positions.
+            "screen_content": re.sub("[\U00010000-\U0010FFFF]", "\u25a1", content),
             "siblings": siblings, "history": hist, "current": hist[-1] if hist else None,
             "status": status_of(latest_for(conn, chunk_id))}
 

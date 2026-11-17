@@ -125,6 +125,10 @@ Shows each pipeline stage (manifest, attachments, ingest, provenance, ingest QA,
 
 ## Personal Data Reviewer (formerly Redaction)
 
+**Repeats.** Email threads quote each other, so the same paragraph turns up in many files. An undecided element whose text you have already decided anywhere in the request's folders is shown under *Repeats*. **Apply the same decisions** records the matching decision for each one, under your name and with `copied_from` in the event log. Text extracted elsewhere becomes *Leave out: Duplicate – already in the Personal Data Report*. Text left out for a reason gets that reason. A *Leave part out* is copied only onto exactly the same text. Text you decided differently in two places is never copied; decide it yourself. Text under 20 characters (sign-offs, names) must match exactly.
+
+**Emoji** and other characters beyond U+FFFF are shown as □: the browser counts them as two characters, which used to shift positions. The files themselves are unchanged.
+
 ### Preparing a folder
 
 Put the documents to review in a folder inside the case output, as UTF-8 `.txt` files. The redaction tool reads only `.txt` files. For example, `output/deep_dive_<date>/` with a call transcript, a summary and full email texts. Copy them; never point the tool at `input/`. In a case, the Redaction page lists every folder under `output/` that holds `.txt` files.

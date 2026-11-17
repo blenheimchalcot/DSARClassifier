@@ -169,16 +169,24 @@ def _left_to_process(data: dict, items: dict, folders: dict[str, Path], pv: dict
                                "out of the report. Decide the item again (Review, or a review stack) so it no longer "
                                "includes that text."})
     fids = {str(p): fid for fid, p in folders.items()}
+    from dsar.toolbox.redaction import markup
+    included = [Path(f) for f in data["folders"]]
+    loaded = [(p, markup.Folder(p, "", None).docs()) for p in included]
+    sources = markup.repeat_sources(loaded)
+    repeats = {str(p / name): len(els) for p, docs in loaded for name, els in markup.repeats_for(docs, sources).items()}
     files = []
     for o in data["outstanding"]:
         if o.get("file") and not o["why"].startswith("conflict"):
             path = Path(o["file"])
             files.append({"file": path.name, "folder": path.parent.name, "fid": fids.get(str(path.parent)),
-                          "count": int(o["why"].split()[0])})
+                          "count": int(o["why"].split()[0]), "repeats": repeats.get(str(path), 0)})
     if files:
+        n_rep = sum(f["repeats"] for f in files)
         out.append({"title": "Finish in the Personal Data Reviewer", "kind": "files", "rows": files, "blocking": True,
                     "hint": "Decide every element (Extract, Leave out, Leave part out), or leave a whole folder out of "
-                            "the report below with a reason."})
+                            "the report below with a reason."
+                            + (f" {n_rep} of these repeat text you have already decided: open the folder and click "
+                               "'Apply the same decisions'." if n_rep else "")})
     if pv and pv["placeholders"]:
         out.append({"title": "Complete the template", "kind": "text", "rows": pv["placeholders"], "blocking": True,
                     "hint": "Fill these in the case's template (data/templates/) so every build has them, or in the Word "
