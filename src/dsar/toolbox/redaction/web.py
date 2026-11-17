@@ -184,9 +184,13 @@ def apply_repeats(fid):
         return jsonify({"error": "sign in first"}), 400
     d = f.docs()
     shas = {x["name"]: x["sha256"] for x in d}
+    body_in = request.get_json(silent=True) or {}
+    only = {(o.get("file"), o.get("element")) for o in body_in.get("only") or []} if body_in.get("only") else None
     applied, failed = [], []
     for name, els in _repeats(f, d).items():
         for el_id, info in els.items():
+            if only is not None and (name, el_id) not in only:
+                continue                                   # confirmed one by one in the Repeats view
             body = {"file": name, "sha256": shas[name], "action": "decide", "element": el_id,
                     "decision": info["decision"], "reason": info.get("reason"), "note": info.get("note"),
                     "redactions": info.get("redactions"), "copied_from": f"{info['from']}#{info['element']}"}
@@ -195,7 +199,7 @@ def apply_repeats(fid):
                 applied.append({"file": name, "element": el_id, "decision": info["decision"], "copied_from": body["copied_from"]})
             except (KeyError, ValueError) as exc:
                 failed.append({"file": name, "element": el_id, "error": str(exc)})
-    data = {"folder": str(f.folder), "applied": len(applied), "failed": len(failed),
+    data = {"folder": str(f.folder), "applied": len(applied), "failed": len(failed), "confirmed_individually": only is not None,
             "decisions": dict(Counter(a["decision"] for a in applied)),
             "events_sha256": audit.sha256_file(f.events.path) if f.events.path.exists() else None}
     records.log(TOOL, "apply-repeats", data)

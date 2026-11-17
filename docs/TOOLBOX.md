@@ -125,6 +125,8 @@ Shows each pipeline stage (manifest, attachments, ingest, provenance, ingest QA,
 
 ## Personal Data Reviewer (formerly Redaction)
 
+**Sections.** The sidebar's four sections work across every file in the folder: **To review (7+)**, **6 and below**, **Repeats** and **Reviewed**, each with filters (score; decision, inclusion, by hand or copied, reason). *By file* opens one file as before. Decisions work the same everywhere (E / L / P).
+
 **Only 7+ is reviewed.** Run `dsar markup score FOLDER` (a review stack takes about 1 minute per 50 elements) and each element gets a model score. Elements scored **7 or more** need your decision. Those scored below 7 fold into *Below 7*: they need no decision and stay out of the report, unless you open one and extract it. Elements not yet scored, or with no number from the model, still need a decision. Elements with no letters or digits (`---`) need none. A review-stack file also shows its item's own classification (score, reason, evidence) at the top.
 
 **Repeats.** Email threads quote each other, so the same paragraph turns up in many files. An undecided element whose text you have already decided anywhere in the request's folders is shown under *Repeats*. **Apply the same decisions** records the matching decision for each one, under your name and with `copied_from` in the event log. Text extracted elsewhere becomes *Leave out: Duplicate – already in the Personal Data Report*. Text left out for a reason gets that reason. A *Leave part out* is copied only onto exactly the same text. Text you decided differently in two places is never copied; decide it yourself. Text under 20 characters (sign-offs, names) must match exactly.

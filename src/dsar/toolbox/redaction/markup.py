@@ -220,7 +220,8 @@ class Folder:
                     continue
             active = [d for d in active if not _overlaps(d["span"], span)]
             if e["action"] == "decide":
-                active.append({**{k: e[k] for k in ("decision", "redactions", "reviewer", "ts")}, "span": span})
+                active.append({**{k: e[k] for k in ("decision", "redactions", "reviewer", "ts")}, "span": span,
+                               "copied_from": e.get("copied_from", "")})
         decisions, earlier = {}, {}
         for el in doc["elements"]:
             hits = [d for d in active if _overlaps(d["span"], el["parts"])]
@@ -436,7 +437,7 @@ def repeat_sources(folders: list[tuple[Path, list[dict]]]) -> dict[str, dict]:
                 key = _norm(raw)
                 if not dec or not key:
                     continue
-                c = {"from": f"{path.name}/{d['name']}", "element": el["id"], "decision": dec["decision"],
+                c = {"from": f"{path.name}/{d['name']}", "element": el["id"], "decision": dec["decision"], "text": raw[:1200],
                      "redactions": dec["redactions"], "start": el["parts"][0][0], "single": len(el["parts"]) == 1}
                 for k in ("=" + raw, "~" + key) if len(key) >= REPEAT_MIN_CHARS else ("=" + raw,):
                     copies.setdefault(k, []).append(c)
@@ -483,7 +484,8 @@ def repeats_for(docs: list[dict], sources: dict[str, dict]) -> dict[str, dict]:
             src = exact or (sources.get("~" + key) if len(key) >= REPEAT_MIN_CHARS else None)
             if not src or src.get("ambiguous"):
                 continue
-            info = {"from": src["from"], "element": src["element"], "decision": src["decision"], "kind": src["kind"]}
+            info = {"from": src["from"], "element": src["element"], "decision": src["decision"], "kind": src["kind"],
+                    "text": screen_text(src.get("text", ""))}
             if src["decision"] == "redact_full":
                 r = src["redactions"][0]
                 info.update(reason=r["reason"], note=r.get("note", ""))
@@ -741,7 +743,7 @@ main{padding:0 32px 64px;max-width:940px;width:100%}
 .why{font-size:11px;font-weight:600;color:var(--red);text-decoration:none;margin:0 4px;white-space:nowrap}
 .mark{background:var(--redbg);color:var(--red);text-decoration:line-through;cursor:pointer;border-radius:2px;outline:1px dashed var(--red)}
 .blk{background:#000;color:#fff;font-size:12px;padding:1px 6px;border-radius:2px;white-space:nowrap}
-.itemscore{background:var(--bg);border-left:3px solid var(--part,#c80);border-radius:6px;padding:8px 12px;margin:0 0 10px;font-size:14px}.itemscore .ev{font-size:12px;opacity:.75;margin-top:4px}.form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;font-size:13px}.form.top{justify-content:flex-end;margin:8px 0 10px}.form.col{flex-direction:column;align-items:flex-end}.form .frow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end}.btn kbd{font:600 10px/1 var(--mono,monospace);border:1px solid currentColor;border-radius:3px;padding:1px 4px;margin-left:4px;opacity:.6}
+.itemscore{background:var(--bg);border-left:3px solid var(--part,#c80);border-radius:6px;padding:8px 12px;margin:0 0 10px;font-size:14px}.itemscore .ev{font-size:12px;opacity:.75;margin-top:4px}.sect{display:flex;justify-content:space-between;align-items:center;width:100%;font-weight:600}.sect .cnt{font-weight:600;background:var(--bg);border-radius:99px;padding:0 8px;font-size:12px}.sect.on .cnt{color:var(--ink,#1d1d1b);background:#fff}.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0}.chip{border:1px solid var(--line);background:var(--panel);border-radius:99px;padding:2px 10px;font:inherit;font-size:12px;cursor:pointer}.chip.on{background:var(--accent,#2f5d8a);color:#fff;border-color:transparent}.chip.clear{opacity:.7}.filehead{margin:16px 0 6px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}.pair{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:start;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0;background:var(--panel)}.pair .ptxt{white-space:pre-wrap;font-size:14px;margin-top:4px}.pair .pbtn{display:flex;flex-direction:column;gap:6px}.form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;font-size:13px}.form.top{justify-content:flex-end;margin:8px 0 10px}.form.col{flex-direction:column;align-items:flex-end}.form .frow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end}.btn kbd{font:600 10px/1 var(--mono,monospace);border:1px solid currentColor;border-radius:3px;padding:1px 4px;margin-left:4px;opacity:.6}
 .form select,.form input{padding:4px 6px;font:inherit;font-size:13px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px}.form input{flex:1;min-width:140px}
 mark{background:#ffe066;color:#000}
 .prior{font-size:13px;background:var(--partbg);color:var(--part);border-radius:6px;padding:4px 10px;margin-top:6px}
@@ -769,13 +771,16 @@ details.more .menu button{display:block;width:100%;text-align:left;border:0;back
 const TOKEN=new URLSearchParams(location.search).get("token")||(document.querySelector('meta[name="csrf"]')||{}).content,REASONS=__REASONS__,SUBJECT=(new URLSearchParams(location.search).get("subject")||"").toLowerCase();
 const COLOURS=["#2f5d8a","#2e7d4f","#8a4b9c","#b5651d","#1f7a8c"];
 const LABEL={release:"Extracted",redact_full:"Left out",redact_partial:"Extracted in part",pending:"Not reviewed"};
-let DOCS=[],cur=0,view="original",q="",edit=null,full=null,split=null,minScore=-1,focus=null,lastReason=REASONS[0],doneOpen=false,openRow=null,REP={},repOpen=false,lowOpen=false;
+let DOCS=[],cur=0,view="original",q="",edit=null,full=null,split=null,minScore=-1,focus=null,lastReason=REASONS[0],doneOpen=false,openRow=null,REP={},repOpen=false,lowOpen=false,MODE="review",DISMISS=new Set(),F={rs:new Set(),ls:new Set(),dd:new Set(),ir:new Set(),hw:new Set(),rr:"",sb:""};
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const reasonOpts=()=>REASONS.map(x=>`<option>${esc(x)}</option>`).join("");
 function toast(m){const t=document.getElementById("toast");t.textContent=m;t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",3000)}
-async function load(keep){const j=await (await fetch("api/docs?token="+TOKEN)).json();DOCS=j.docs;REP=j.repeats||{};document.getElementById("who").innerHTML="Reviewer: <b>"+esc(j.reviewer)+"</b>"+(j.chain_ok?"":" · <span style='color:var(--red)'>event log chain broken</span>");if(!keep){cur=0;const P=new URLSearchParams(location.search),F=P.get("file"),E=P.get("el");if(F){const i=DOCS.findIndex(d=>d.name===F);if(i>=0){cur=i;if(E){openRow=E;focus=E}}}}nav();render();if(!keep&&openRow)setTimeout(()=>goTo(openRow),60);if(!focus){const d=DOCS[cur];focus=(d.elements.find(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[d.name]||{})[e.id])||{}).id;render()}}
+async function load(keep){const j=await (await fetch("api/docs?token="+TOKEN)).json();DOCS=j.docs;REP=j.repeats||{};document.getElementById("who").innerHTML="Reviewer: <b>"+esc(j.reviewer)+"</b>"+(j.chain_ok?"":" · <span style='color:var(--red)'>event log chain broken</span>");if(!keep){cur=0;const P=new URLSearchParams(location.search),F=P.get("file"),E=P.get("el");if(F){const i=DOCS.findIndex(d=>d.name===F);if(i>=0){MODE="file";cur=i;if(E){openRow=E;focus=E}}}}nav();render();if(!keep&&openRow)setTimeout(()=>goTo(openRow),60);if(!focus){const d=DOCS[cur];focus=(d.elements.find(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[d.name]||{})[e.id])||{}).id;render()}}
 async function act(body){Object.assign(body,{file:DOCS[cur].name,sha256:DOCS[cur].sha256});const r=await fetch("api/act",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify(body)});const j=await r.json();if(!r.ok){toast(j.error);return false}return true}
-function nav(){const f=document.getElementById("files");f.innerHTML="";DOCS.forEach((d,i)=>{const n=Object.keys(d.decisions).length,nr=Object.keys(REP[d.name]||{}).length,tot=d.elements.filter(e=>(!e.blank&&!e.below)||d.decisions[e.id]).length,b=document.createElement("button");b.className=i===cur?"on":"";b.innerHTML=esc(d.name.replace(/\.txt$/,"").replace(/_/g," "))+`<span class="prog">${d.item&&d.item.score!=null?`score ${d.item.score} · `:""}${n}/${tot} reviewed · ${d.redactions.length} passage(s) left out${nr?` · ${nr} repeat(s)`:""}</span>`;b.onclick=()=>{if(edit&&!confirm("Discard unsaved marks?"))return;cur=i;q="";edit=null;full=null;split=null;focus=(d.elements.find(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[d.name]||{})[e.id])||{}).id;nav();render();scrollTo(0,0)};f.appendChild(b)})}
+function nav(){const f=document.getElementById("files");f.innerHTML="";const c=counts();
+ for(const k in SECTIONS){const b=document.createElement("button");b.className="sect"+(MODE===k?" on":"");b.innerHTML=`${SECTIONS[k]}<span class="cnt">${c[k]}</span>`;b.onclick=()=>{MODE=k;q="";openRow=null;edit=null;full=null;split=null;focus=null;render();scrollTo(0,0)};f.appendChild(b)}
+ const hd=document.createElement("div");hd.className="t";hd.style.margin="12px 0 4px";hd.textContent="By file";f.appendChild(hd);
+ DOCS.forEach((d,i)=>{const n=Object.keys(d.decisions).length,nr=Object.keys(REP[d.name]||{}).length,tot=d.elements.filter(e=>(!e.blank&&!e.below)||d.decisions[e.id]).length,b=document.createElement("button");b.className=MODE==="file"&&i===cur?"on":"";b.innerHTML=esc(d.name.replace(/\.txt$/,"").replace(/_/g," "))+`<span class="prog">${d.item&&d.item.score!=null?`score ${d.item.score} · `:""}${n}/${tot} reviewed · ${d.redactions.length} passage(s) left out${nr?` · ${nr} repeat(s)`:""}</span>`;b.onclick=()=>{if(edit&&!confirm("Discard unsaved marks?"))return;MODE="file";cur=i;q="";edit=null;full=null;split=null;focus=(d.elements.find(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[d.name]||{})[e.id])||{}).id;nav();render();scrollTo(0,0)};f.appendChild(b)})}
 function hl(s){let e=esc(s);if(q){const re=new RegExp("("+q.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+")","gi");e=e.replace(re,"<mark>$1</mark>")}return e}
 // One part [a,b] of an element, with redactions rs; cls is the class for released text
 function piece(d,a,b,rs,cls,editable){let out="",pos=a;const seg0=(x,y)=>`<span data-s="${x}" class="${cls}">${hl(d.text.slice(x,y))}</span>`;
@@ -791,21 +796,10 @@ function row(d,el){const dec=d.decisions[el.id],st=dec.decision,text=el.parts.ma
 // The three decision buttons, on every element; the current decision is shown pressed.
 function buttons(st){return `<button class="btn big ${st==="release"?"go":""}" data-a="approve" title="A">${st==="release"?"✓ ":""}Extract <kbd>E</kbd></button><button class="btn big ${st==="redact_full"?"stop":""}" data-a="full" title="R">${st==="redact_full"?"✓ ":""}Leave out <kbd>L</kbd></button><button class="btn big ${st==="redact_partial"?"primary":""}" data-a="partial" title="P">${st==="redact_partial"?"✓ Edit parts <kbd>P</kbd>":"Leave part out <kbd>P</kbd>"}</button>`}
 function more(el,decided){return `<details class="more"><summary title="More">⋯</summary><div class="menu"><button data-a="split">Split…</button>${el.split?'<button data-a="unsplit">Undo split</button>':""}${decided?'<button data-a="change">Clear decision</button>':""}</div></details>`}
-function render(){const d=DOCS[cur],m=document.getElementById("main");if(!d){m.innerHTML="<p>No .txt files in this folder.</p>";return}
- const who=[...new Set(d.elements.map(e=>e.who).filter(Boolean))],n=Object.keys(d.decisions).length,total=d.elements.filter(e=>(!e.blank&&!e.below)||d.decisions[e.id]).length;
- let h=`<div class="bar"><input type="search" id="q" placeholder="Search…" value="${esc(q)}"><span class="toggle"><button data-v="original" class="${view==="original"?"on":""}">Original</button><button data-v="redacted" class="${view==="redacted"?"on":""}">As extracted</button></span>
-  <select id="min" class="btn" title="Show only elements the model scored at or above this"><option value="-1">All scores</option>${[1,5,6,7,8].map(n=>`<option value="${n}" ${minScore===n?"selected":""}>Model score ≥ ${n}</option>`).join("")}</select><button class="btn" id="all">Extract all not yet reviewed</button><button class="btn primary" id="exp">Export redacted copy</button></div>
-  <div class="legend"><span><i class="sw" style="background:var(--okbg);border:1px solid var(--ok)"></i>Extracted</span><span><i class="sw" style="background:var(--redbg);border:1px solid var(--red)"></i>Left out</span><span>${n} of ${total} elements reviewed</span><span class="keys"><kbd>E</kbd> extract · <kbd>L</kbd> leave out · <kbd>P</kbd> leave part out · <kbd>↓</kbd><kbd>↑</kbd> move · <kbd>Enter</kbd> confirm</span></div>`;
- if(d.item)h+=`<div class="itemscore">Classified as a whole item: <b>model score ${d.item.score??"–"}</b>${d.item.reason?" · "+esc(d.item.reason):""}${d.item.evidence?`<div class="ev">Evidence: “${esc(d.item.evidence)}”</div>`:""}</div>`;
- if(d.stale)h+=`<div class="warn">${d.stale} earlier decision(s) were made on a different version of this file and are not shown.</div>`;
- const cards={},shown=[];
- for(const el of d.elements){if(el.blank&&!d.decisions[el.id])continue;const text=el.parts.map(([a,b])=>d.text.slice(a,b)).join(" ");
-  if(q&&!text.toLowerCase().includes(q.toLowerCase())&&!(el.who||"").toLowerCase().includes(q.toLowerCase())&&edit?.el!==el.id)continue;
-  if(minScore>=0&&!(el.score&&el.score.score>=minScore)&&edit?.el!==el.id&&split?.el!==el.id)continue;
-  shown.push(el);
-  const dec=d.decisions[el.id],st=dec?dec.decision:"pending",editing=edit&&edit.el===el.id,c=el.who?COLOURS[who.indexOf(el.who)%COLOURS.length]:"var(--muted)";
+function cardHTML(d,el,key,who){
+  const dec=d.decisions[el.id],st=dec?dec.decision:"pending",editing=edit&&edit.el===key,c=el.who?COLOURS[who.indexOf(el.who)%COLOURS.length]:"var(--muted)";
   const subj=el.who&&SUBJECT&&el.who.toLowerCase().startsWith(SUBJECT);
-  const splitting=split&&split.el===el.id;let body,ctl;
+  const splitting=split&&split.el===key;let body,ctl;
   if(editing){const rs=edit.marks.map((r,i)=>({...r,i}));body=el.parts.map(([a,b])=>piece(d,a,b,rs,"",true)).join(" ");
    ctl=`<span class="badge redact_partial">Marking parts: ${edit.marks.length}</span><span class="sp"></span><button class="btn go" data-a="save">Save</button><button class="btn" data-a="cancel">Cancel</button>`}
   else if(dec){body=el.parts.map(([a,b])=>piece(d,a,b,dec.redactions,st==="release"||st==="redact_partial"?"rel":"",false)).join(" ");
@@ -818,10 +812,23 @@ function render(){const d=DOCS[cur],m=document.getElementById("main");if(!d){m.i
   if(editing)top=`<div class="form top">Select text below to mark it. Reason for new marks: <select id="er">${reasonOpts()}</select><input id="en" placeholder="Note (required for Other)" value="${esc(edit.note||"")}"></div>`;
   if(splitting){const opts=[...who,"Unknown speaker"].map(w=>`<option ${w===split.who?"selected":""}>${esc(w)}</option>`).join("");
    form=`<div class="form">${split.at==null?"Click in the text where the new part should start.":"New part starts at the blue line. Speaker of the new part:"} <select id="sw">${opts}</select><button class="btn primary" data-a="splitok" ${split.at==null?"disabled":""}>Split here</button><button class="btn" data-a="splitcancel">Cancel</button></div>`}
-  if(full===el.id)top=`<div class="form top col"><div class="frow"><button class="btn stop" data-a="fullok">Leave out (Enter)</button><button class="btn" data-a="fullcancel">Cancel (Esc)</button></div><div class="frow">Leave all of this element out. Reason: <select id="fr">${REASONS.map(x=>`<option ${x===lastReason?"selected":""}>${esc(x)}</option>`).join("")}</select><input id="fn" placeholder="Note (required for Other)"></div></div>`;
+  if(full===key)top=`<div class="form top col"><div class="frow"><button class="btn stop" data-a="fullok">Leave out (Enter)</button><button class="btn" data-a="fullcancel">Cancel (Esc)</button></div><div class="frow">Leave all of this element out. Reason: <select id="fr">${REASONS.map(x=>`<option ${x===lastReason?"selected":""}>${esc(x)}</option>`).join("")}</select><input id="fn" placeholder="Note (required for Other)"></div></div>`;
   const s=el.score,chip=s?(s.score==null?`<span class="sc lo" title="${esc(s.special||s.description||"")}">Model: –</span>`:`<span class="sc ${s.score>=7?"hi":s.score>=5?"mid":"lo"}" title="Model suggestion, not a decision: ${esc(s.description||"")}${s.evidence?" | "+esc(s.evidence):""}">Model ${s.score}</span>`):"";
   const name=el.who?`<b>${esc(el.who)}${el.split?" <span class='t'>(split by reviewer)</span>":""}</b><span class="t">${esc(el.t||"")}</span>`:`<b style="color:var(--muted)">${esc(el.label)}</b>`;
-  cards[el.id]=`<div class="el ${st} ${subj?"subj":""} ${editing?"editing":""} ${splitting?"editing splitting":""} ${focus===el.id?"focus":""}" data-el="${el.id}" style="--c:${c}"><div class="h">${name}${chip}${ctl}</div>${top}${prior?`<div class="prior">Decided before this element was split: ${prior}. Please decide again.</div>`:""}<div class="txt">${body}</div>${form}</div>`}
+  return `<div class="el ${st} ${subj?"subj":""} ${editing?"editing":""} ${splitting?"editing splitting":""} ${focus===key?"focus":""}" data-el="${key}" style="--c:${c}"><div class="h">${name}${chip}${ctl}</div>${top}${prior?`<div class="prior">Decided before this element was split: ${prior}. Please decide again.</div>`:""}<div class="txt">${body}</div>${form}</div>`}
+function render(){if(MODE!=="file")return renderSection();const d=DOCS[cur],m=document.getElementById("main");if(!d){m.innerHTML="<p>No .txt files in this folder.</p>";return}
+ const who=[...new Set(d.elements.map(e=>e.who).filter(Boolean))],n=Object.keys(d.decisions).length,total=d.elements.filter(e=>(!e.blank&&!e.below)||d.decisions[e.id]).length;
+ let h=`<div class="bar"><input type="search" id="q" placeholder="Search…" value="${esc(q)}"><span class="toggle"><button data-v="original" class="${view==="original"?"on":""}">Original</button><button data-v="redacted" class="${view==="redacted"?"on":""}">As extracted</button></span>
+  <select id="min" class="btn" title="Show only elements the model scored at or above this"><option value="-1">All scores</option>${[1,5,6,7,8].map(n=>`<option value="${n}" ${minScore===n?"selected":""}>Model score ≥ ${n}</option>`).join("")}</select><button class="btn" id="all">Extract all not yet reviewed</button><button class="btn primary" id="exp">Export redacted copy</button></div>
+  <div class="legend"><span><i class="sw" style="background:var(--okbg);border:1px solid var(--ok)"></i>Extracted</span><span><i class="sw" style="background:var(--redbg);border:1px solid var(--red)"></i>Left out</span><span>${n} of ${total} elements reviewed</span><span class="keys"><kbd>E</kbd> extract · <kbd>L</kbd> leave out · <kbd>P</kbd> leave part out · <kbd>↓</kbd><kbd>↑</kbd> move · <kbd>Enter</kbd> confirm</span></div>`;
+ if(d.item)h+=`<div class="itemscore">Classified as a whole item: <b>model score ${d.item.score??"–"}</b>${d.item.reason?" · "+esc(d.item.reason):""}${d.item.evidence?`<div class="ev">Evidence: “${esc(d.item.evidence)}”</div>`:""}</div>`;
+ if(d.stale)h+=`<div class="warn">${d.stale} earlier decision(s) were made on a different version of this file and are not shown.</div>`;
+ const cards={},shown=[];
+ for(const el of d.elements){if(el.blank&&!d.decisions[el.id])continue;const text=el.parts.map(([a,b])=>d.text.slice(a,b)).join(" ");
+  if(q&&!text.toLowerCase().includes(q.toLowerCase())&&!(el.who||"").toLowerCase().includes(q.toLowerCase())&&edit?.el!==el.id)continue;
+  if(minScore>=0&&!(el.score&&el.score.score>=minScore)&&edit?.el!==el.id&&split?.el!==el.id)continue;
+  shown.push(el);
+  cards[el.id]=cardHTML(d,el,el.id,who)}
  // Processed elements collapse into one bar at the top; the rest follow in document order.
  const active=id=>edit?.el===id||full===id||split?.el===id||openRow===id;
  const R=REP[d.name]||{},done=shown.filter(el=>d.decisions[el.id]),todo=shown.filter(el=>!d.decisions[el.id]&&!R[el.id]&&!el.below),reps=shown.filter(el=>!d.decisions[el.id]&&R[el.id]),low=shown.filter(el=>!d.decisions[el.id]&&el.below);
@@ -843,20 +850,22 @@ function render(){const d=DOCS[cur],m=document.getElementById("main");if(!d){m.i
  const lt=document.getElementById("ltoggle");if(lt)lt.onclick=()=>{lowOpen=!lowOpen;openRow=null;render()};
  const rt=document.getElementById("rtoggle");if(rt)rt.onclick=()=>{repOpen=!repOpen;openRow=null;render()};
  const ar=document.getElementById("applyrep");if(ar)ar.onclick=async()=>{ar.disabled=true;const r=await fetch("api/apply-repeats",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:"{}"});const j=await r.json();if(!r.ok){toast(j.error||"Not applied");ar.disabled=false;return}toast(`Applied ${j.applied} decision(s)${j.failed?`, ${j.failed} need deciding by hand`:""}`);await load(true);nav()};
- m.querySelectorAll(".row").forEach(r=>r.onclick=()=>{openRow=r.dataset.row;focus=openRow;render()});
  document.getElementById("min").onchange=ev=>{minScore=+ev.target.value;render()};
  document.getElementById("exp").onclick=()=>window.open("export?token="+TOKEN+"&file="+encodeURIComponent(d.name),"_blank");
  document.getElementById("all").onclick=async()=>{const todo=d.elements.filter(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[d.name]||{})[e.id]);if(!todo.length||!confirm(`Extract ${todo.length} element(s) not yet reviewed, as they are?`))return;for(const e of todo)if(!await act({action:"decide",element:e.id,decision:"release"}))break;await load(true)};
- m.querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const id=b.closest(".el").dataset.el,a=b.dataset.a;
-  if(a==="approve"){if(DOCS[cur].decisions[id]?.decision==="release")return advance(id);if(await act({action:"decide",element:id,decision:"release"})){await load(true);advance(id)}}
-  else if(a==="full"){if(edit)return toast("Save or cancel the element you are marking first");focus=id;full=id;render()}
+ wire(m);
+}
+function wire(m){
+ m.querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const key=b.closest(".el").dataset.el,[fi,id]=splitKey(key),a=b.dataset.a;cur=fi;
+  if(a==="approve"){if(DOCS[cur].decisions[id]?.decision==="release")return advance(key);if(await act({action:"decide",element:id,decision:"release"})){await load(true);advance(key)}}
+  else if(a==="full"){if(edit)return toast("Save or cancel the element you are marking first");focus=key;full=key;render()}
   else if(a==="fullcancel"){full=null;render()}
-  else if(a==="fullok"){lastReason=document.getElementById("fr").value;if(await act({action:"decide",element:id,decision:"redact_full",reason:lastReason,note:document.getElementById("fn").value})){full=null;await load(true);advance(id)}}
+  else if(a==="fullok"){lastReason=document.getElementById("fr").value;if(await act({action:"decide",element:id,decision:"redact_full",reason:lastReason,note:document.getElementById("fn").value})){full=null;await load(true);advance(key)}}
   else if(a==="partial"){if(edit)return toast("Save or cancel the element you are marking first");const prev=DOCS[cur].decisions[id];view="original";full=null;split=null;
-   edit={el:id,marks:prev&&prev.decision==="redact_partial"?prev.redactions.map(r=>({start:r.start,end:r.end,reason:r.reason,note:r.note})):[],reason:REASONS[0]};render()}
+   edit={el:key,marks:prev&&prev.decision==="redact_partial"?prev.redactions.map(r=>({start:r.start,end:r.end,reason:r.reason,note:r.note})):[],reason:REASONS[0]};render()}
   else if(a==="cancel"){edit=null;render()}
-  else if(a==="save"){if(await act({action:"decide",element:id,decision:"redact_partial",redactions:edit.marks})){edit=null;await load(true);advance(id)}}
-  else if(a==="split"){if(edit)return toast("Save or cancel the element you are marking first");full=null;split={el:id,at:null,who:"Unknown speaker"};render()}
+  else if(a==="save"){if(await act({action:"decide",element:id,decision:"redact_partial",redactions:edit.marks})){edit=null;await load(true);advance(key)}}
+  else if(a==="split"){if(edit)return toast("Save or cancel the element you are marking first");full=null;split={el:key,at:null,who:"Unknown speaker"};render()}
   else if(a==="splitcancel"){split=null;render()}
   else if(a==="splitok"){const w=document.getElementById("sw").value;if(await act({action:"split",at:split.at,who:w==="Unknown speaker"?"Unknown speaker":w})){split=null;await load(true)}}
   else if(a==="unsplit"){if(confirm("Undo this split? Decisions on either part will need to be made again."))if(await act({action:"unsplit",at:+id.slice(1)}))await load(true)}
@@ -865,11 +874,63 @@ function render(){const d=DOCS[cur],m=document.getElementById("main");if(!d){m.i
  const fr=document.getElementById("fr");if(fr){fr.focus();fr.onkeydown=ev=>{if(ev.key==="Enter"){ev.preventDefault();m.querySelector('[data-a="fullok"]').click()}}}
  m.querySelectorAll(".mark").forEach(s=>s.onclick=()=>{edit.marks.splice(+s.dataset.i,1);render()});
  const er=document.getElementById("er"),en=document.getElementById("en");if(er)er.onchange=()=>edit.reason=er.value;if(en)en.oninput=()=>edit.note=en.value;
+ m.querySelectorAll(".row").forEach(r=>r.onclick=()=>{openRow=r.dataset.row;focus=openRow;render()});
 }
+function splitKey(k){if(typeof k==="string"&&k.includes("|")){const [a,b]=k.split("|");return [+a,b]}return [cur,k]}
+function undecidedKey(k){const [fi,id]=splitKey(k);return !DOCS[fi].decisions[id]}
+
+// ---- Section views: every file of the folder at once -------------------------------------------
+// review: undecided, scored 7+ (or not yet scored) | low: undecided, scored below 7
+// repeats: undecided, same text as a decided element | done: every decided element
+const SECTIONS={review:"To review (7+)",low:"6 and below",repeats:"Repeats",done:"Reviewed"};
+function sc(el){const s=el.score;return s&&s.score!=null?s.score:null}
+function pool(kind){const out=[];DOCS.forEach((d,fi)=>{const R=REP[d.name]||{};d.elements.forEach(el=>{if(el.blank&&!d.decisions[el.id])return;
+ const dec=d.decisions[el.id],rep=!dec&&R[el.id]&&!DISMISS.has(fi+"|"+el.id);
+ const k=dec?"done":rep?"repeats":el.below?"low":"review";if(k===kind)out.push({d,fi,el,dec,rep:rep?R[el.id]:null})})});return out}
+function counts(){const c={};for(const k in SECTIONS)c[k]=pool(k).length;return c}
+function chipRow(name,values,sel,label){return `<div class="chips"><span class="t">${label}</span>${values.map(v=>`<button class="chip ${sel.has(String(v))?"on":""}" data-chip="${name}" data-v="${v}">${v==="none"?"not scored":v}</button>`).join("")}<button class="chip clear" data-chip="${name}" data-v="*">all</button></div>`}
+function renderSection(){const m=document.getElementById("main"),who=[];
+ let items=pool(MODE);
+ let h=`<div class="bar"><b style="font-size:16px">${SECTIONS[MODE]}</b><span class="t">across all ${DOCS.length} file(s) in this folder</span><input type="search" id="q" placeholder="Search…" value="${esc(q)}"></div>`;
+ const qq=q.toLowerCase(),txt=x=>x.el.parts.map(([a,b])=>x.d.text.slice(a,b)).join(" ");
+ if(qq)items=items.filter(x=>txt(x).toLowerCase().includes(qq)||x.d.name.toLowerCase().includes(qq));
+ if(MODE==="review"){const vals=[...new Set(pool("review").map(x=>sc(x.el)===null?"none":String(sc(x.el))))].sort();h+=chipRow("rs",vals,F.rs,"Model score");if(F.rs.size)items=items.filter(x=>F.rs.has(sc(x.el)===null?"none":String(sc(x.el))))}
+ if(MODE==="low"){const vals=[...new Set(pool("low").map(x=>String(sc(x.el))))].sort((a,b)=>a-b);h+=chipRow("ls",vals,F.ls,"Model score");if(F.ls.size)items=items.filter(x=>F.ls.has(String(sc(x.el))));
+  h+=`<p class="t">Scored below 7: no decision needed and nothing goes in the report. Extract one if it should be in.</p>`}
+ if(MODE==="done"){const all=pool("done"),dv=[...new Set(all.map(x=>x.dec.decision))],rv=[...new Set(all.flatMap(x=>x.dec.redactions.map(r=>r.reason)))];
+  h+=`<div class="chips"><span class="t">Decision</span>${dv.map(v=>`<button class="chip ${F.dd.has(v)?"on":""}" data-chip="dd" data-v="${v}">${LABEL[v]}</button>`).join("")}<button class="chip clear" data-chip="dd" data-v="*">all</button></div>`;
+  h+=`<div class="chips"><span class="t">In the report</span>${["yes","no"].map(v=>`<button class="chip ${F.ir.has(v)?"on":""}" data-chip="ir" data-v="${v}">${v==="yes"?"included":"not included"}</button>`).join("")}<span class="t" style="margin-left:12px">How</span>${["by hand","copied"].map(v=>`<button class="chip ${F.hw.has(v)?"on":""}" data-chip="hw" data-v="${v}">${v==="copied"?"copied from a repeat":"decided by hand"}</button>`).join("")}<button class="chip clear" data-chip="ir,hw" data-v="*">all</button></div>`;
+  h+=`<div class="chips"><span class="t">Reason</span><select id="rsel" class="btn"><option value="">any</option>${rv.map(v=>`<option ${F.rr===v?"selected":""}>${esc(v)}</option>`).join("")}</select><span class="t" style="margin-left:12px">Model score</span><select id="ssel" class="btn"><option value="">any</option>${["7+","below 7","not scored"].map(v=>`<option ${F.sb===v?"selected":""}>${v}</option>`).join("")}</select></div>`;
+  if(F.dd.size)items=items.filter(x=>F.dd.has(x.dec.decision));
+  if(F.ir.size)items=items.filter(x=>F.ir.has(x.dec.decision==="redact_full"?"no":"yes"));
+  if(F.hw.size)items=items.filter(x=>F.hw.has(x.dec.copied_from?"copied":"by hand"));
+  if(F.rr)items=items.filter(x=>x.dec.redactions.some(r=>r.reason===F.rr));
+  if(F.sb)items=items.filter(x=>{const s=sc(x.el);return F.sb==="7+"?s!==null&&s>=7:F.sb==="below 7"?s!==null&&s<7:s===null})}
+ if(MODE==="repeats"&&items.length)h+=`<div class="bar"><button class="btn primary" id="confirmall">Confirm all ${items.length} shown</button><span class="t">Each repeat is shown beside the element it matches. Confirm to record the same decision under your name; “Not a match” moves it back to be reviewed.</span></div>`;
+ h+=`<p class="t">${items.length} element(s)</p>`;
+ let last=null;
+ for(const x of items.slice(0,300)){const key=x.fi+"|"+x.el.id;
+  if(x.d.name!==last){h+=`<div class="filehead">${esc(x.d.name.replace(/\.txt$/,"").replace(/_/g," "))}${x.d.item&&x.d.item.score!=null?` · item score ${x.d.item.score}`:""}</div>`;last=x.d.name}
+  if(MODE==="repeats"&&openRow!==key){const r=x.rep;
+   h+=`<div class="pair" data-key="${key}"><div class="side"><div class="t">This element</div><div class="ptxt">${hl(txt(x))}</div></div><div class="side"><div class="t">${r.kind==="duplicate"?`Same text is already in the report (${esc(r.from)})`:`Same text decided in ${esc(r.from)}`}. Confirm records: <span class="badge ${r.decision}">${LABEL[r.decision]}</span>${r.reason?" "+esc(r.reason):""}</div><div class="ptxt">${hl(r.text||"")}</div></div><div class="pbtn"><button class="btn go" data-rep="ok">Confirm match</button><button class="btn" data-rep="no">Not a match</button></div></div>`;continue}
+  if(MODE==="done"&&openRow!==key&&focus!==key){h+=row(x.d,x.el).replace(`data-row="${x.el.id}"`,`data-row="${key}"`).replace("</div>",`${x.dec.copied_from?`<span class="t">copied from ${esc(x.dec.copied_from.split("#")[0])}</span>`:""}</div>`);continue}
+  h+=cardHTML(x.d,x.el,key,who)}
+ if(items.length>300)h+=`<p class="t">Showing the first 300; filter to see the rest.</p>`;
+ if(!items.length)h+=`<p class="alldone">${MODE==="review"?"Nothing left to review at 7+.":MODE==="repeats"?"No repeats waiting.":"Nothing here."}</p>`;
+ m.innerHTML=h;
+ const qi=document.getElementById("q");qi.oninput=()=>{q=qi.value;const p=qi.selectionStart;render();const n=document.getElementById("q");n.focus();n.setSelectionRange(p,p)};
+ m.querySelectorAll("[data-chip]").forEach(b=>b.onclick=()=>{for(const n of b.dataset.chip.split(",")){const s=F[n];if(b.dataset.v==="*")s.clear();else if(n===b.dataset.chip)s.has(b.dataset.v)?s.delete(b.dataset.v):s.add(b.dataset.v)}render()});
+ const rs=document.getElementById("rsel");if(rs)rs.onchange=()=>{F.rr=rs.value;render()};const ss=document.getElementById("ssel");if(ss)ss.onchange=()=>{F.sb=ss.value;render()};
+ m.querySelectorAll("[data-rep]").forEach(b=>b.onclick=async()=>{const key=b.closest(".pair").dataset.key,[fi,id]=splitKey(key);
+  if(b.dataset.rep==="no"){DISMISS.add(key);render();return}
+  await applyRepeats([{file:DOCS[fi].name,element:id}])});
+ const ca=document.getElementById("confirmall");if(ca)ca.onclick=async()=>{ca.disabled=true;await applyRepeats(items.map(x=>({file:x.d.name,element:x.el.id})))};
+ wire(m);nav()}
+async function applyRepeats(only){const r=await fetch("api/apply-repeats",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify({only})});const j=await r.json();if(!r.ok){toast(j.error||"Not applied");return}toast(`Recorded ${j.applied} decision(s)${j.failed?`, ${j.failed} need deciding by hand`:""}`);await load(true);nav()}
 function visibleIds(){return [...document.querySelectorAll("#main .el")].map(x=>x.dataset.el)}
 function goTo(id){if(!id)return;focus=id;document.querySelectorAll(".el.focus").forEach(y=>y.classList.remove("focus"));const x=document.querySelector(`.el[data-el="${id}"]`);if(x){x.classList.add("focus");x.scrollIntoView({block:"center",behavior:"smooth"})}}
 // After a decision, move to the next element not yet reviewed (in the current view and filter).
-function advance(id){openRow=null;render();const d=DOCS[cur],ids=visibleIds(),i=ids.indexOf(id);const next=ids.slice(i+1).find(x=>!d.decisions[x])||ids.find(x=>!d.decisions[x]);if(next)goTo(next);else toast("Every element shown here is reviewed")}
+function advance(id){openRow=null;render();const ids=visibleIds(),i=ids.indexOf(id);const next=ids.slice(i+1).find(undecidedKey)||ids.find(undecidedKey);if(next)goTo(next);else toast("Every element shown here is reviewed")}
 document.addEventListener("keydown",ev=>{if(ev.metaKey||ev.ctrlKey||ev.altKey)return;const t=ev.target;
  if(ev.key==="Escape"){if(full){full=null;render()}else if(split){split=null;render()}else if(edit&&(!edit.marks?.length||confirm("Discard unsaved marks?"))){edit=null;render()}return}
  if(t.closest&&t.closest("input,select,textarea"))return;if(edit||split||full)return;
@@ -877,7 +938,7 @@ document.addEventListener("keydown",ev=>{if(ev.metaKey||ev.ctrlKey||ev.altKey)re
  const k=ev.key.toLowerCase();
  if(k==="arrowdown"||k==="j"){ev.preventDefault();goTo(ids[Math.min(i+1,ids.length-1)]||ids[0])}
  else if(k==="arrowup"||k==="k"){ev.preventDefault();goTo(ids[Math.max(i-1,0)])}
- else if(["a","e","r","l","p"].includes(k)){if(i<0){goTo(ids.find(x=>!DOCS[cur].decisions[x])||ids[0]);return}ev.preventDefault();
+ else if(["a","e","r","l","p"].includes(k)){if(i<0){goTo(ids.find(undecidedKey)||ids[0]);return}ev.preventDefault();
   const b=document.querySelector(`.el[data-el="${focus}"] [data-a="${{a:"approve",e:"approve",r:"full",l:"full",p:"partial"}[k]}"]`);if(b)b.click()}});
 function offset(node,off){const el=(node.nodeType===3?node.parentElement:node).closest("[data-s]");if(!el)return null;let n=0;const w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);let t;while((t=w.nextNode())){if(t===node)return +el.dataset.s+n+off;n+=t.textContent.length}return +el.dataset.s+(node.nodeType===3?off:n)}
 document.addEventListener("click",ev=>{if(!split)return;const box=document.querySelector(`.el[data-el="${split.el}"] .txt`);if(!box||!box.contains(ev.target))return;
@@ -886,7 +947,7 @@ document.addEventListener("click",ev=>{if(!split)return;const box=document.query
 document.addEventListener("mouseup",()=>{if(!edit)return;const sel=getSelection();if(!sel.rangeCount||sel.isCollapsed)return;const r=sel.getRangeAt(0);
  const box=document.querySelector(`.el[data-el="${edit.el}"] .txt`);if(!box||!box.contains(r.startContainer)||!box.contains(r.endContainer)){toast("Select text inside the element you are marking");return}
  let a=offset(r.startContainer,r.startOffset),b=offset(r.endContainer,r.endOffset);if(a==null||b==null)return;if(b<a)[a,b]=[b,a];
- const d=DOCS[cur],el=d.elements.find(e=>e.id===edit.el),reason=document.getElementById("er").value,note=document.getElementById("en").value;
+ const [efi,eid]=splitKey(edit.el),d=DOCS[efi],el=d.elements.find(e=>e.id===eid),reason=document.getElementById("er").value,note=document.getElementById("en").value;
  if(reason===REASONS[REASONS.length-1]&&!note.trim()){toast("'Other' needs a note");return}
  for(const [pa,pb] of el.parts){let s=Math.max(a,pa),e=Math.min(b,pb);while(s<e&&/\s/.test(d.text[s]))s++;while(e>s&&/\s/.test(d.text[e-1]))e--;if(e<=s)continue;
   const keep=[];for(const k of edit.marks){if(k.end<s||k.start>e)keep.push(k);else{s=Math.min(s,k.start);e=Math.max(e,k.end)}}keep.push({start:s,end:e,reason,note});edit.marks=keep}
