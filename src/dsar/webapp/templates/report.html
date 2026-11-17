@@ -3,26 +3,65 @@
 {% block content %}
 <h1>Personal Data Report{% if fam.main_ref != settings.case_ref %} · {{ fam.main_ref }}{% endif %}</h1>
 {% if fam.split %}<p class="note">Request <b>{{ fam.main_ref }}</b>. The report is built from the decisions and Personal Data Reviewer folders in its deeper search <b>{{ fam.review_ref }}</b>, named <b>{{ fam.main_ref }}</b> and saved in {{ fam.main_ref }}'s output folder. Builds are logged in both cases.</p>{% endif %}
-<p class="muted small">Built from the passages extracted in <a href="{{ url_for('review.queue') }}">Review</a> and those extracted in the <a href="{{ url_for('tool_redaction.index') }}">Personal Data Reviewer</a> folders, into the template's table: extract text only, each piece once, oldest first. Every source of every extract goes in a private register beside the report, not in the report.</p>
-
+{% if error %}<div class="err">{{ error }}</div>{% endif %}
 {% if not fam.subject_name %}<div class="err">No data subject name: the case folder has no <span class="mono">config.yaml</span>. The report would be a draft with the name left blank.</div>{% endif %}
-{% if not template_ok %}<div class="err">Template not found: <span class="mono">{{ template }}</span>. Put <b>Personal Data Report.docx</b> there or set <span class="mono">DSAR_TEMPLATES_DIR</span>.</div>
-{% else %}<p class="small">Template: <span class="mono">{{ template }}</span></p>{% endif %}
+{% if not template_ok %}<div class="err">Template not found: <span class="mono">{{ template }}</span>. Put <b>Personal Data Report.docx</b> there or set <span class="mono">DSAR_TEMPLATES_DIR</span>.</div>{% endif %}
 
+{% set blocking = todo | selectattr("blocking") | list %}
 <div class="cards">
-  <div class="card"><b>{{ data.extracts | length }}</b><span class="muted small">extracts in the report ({{ data.from_review }} from review, {{ data.from_redaction }} from the Personal Data Reviewer; duplicates merged)</span></div>
-  <div class="card"><b>{{ data.outstanding | length }}</b><span class="muted small">outstanding: the report is a DRAFT until this is 0</span></div>
+  <a class="card" href="#preview"><b>{{ data.extracts | length }}</b><span class="muted small">extracts going into the report ({{ data.from_review }} from Review, {{ data.from_redaction }} from the Personal Data Reviewer; duplicates merged)</span></a>
+  <a class="card" href="#todo"><b>{{ blocking | map(attribute="rows") | map("length") | sum }}</b><span class="muted small">left to process before the report is final{% if not blocking %}: nothing, it can be built final{% endif %}</span></a>
   <div class="card"><b>{{ data.review.documents | length }}</b><span class="muted small">items released as documents (in full or redacted): not in this report</span></div>
 </div>
 
-{% if error %}<div class="err">{{ error }}</div>{% endif %}
+<h2 id="todo">Left to process</h2>
+{% if not todo %}<p class="note">Nothing left: the next build is final.</p>{% endif %}
+{% set item_groups = todo | selectattr("kind", "equalto", "items") | list %}
+{% if item_groups | length > 1 %}
+<form method="post" action="{{ url_for('review.report_stack') }}" class="stackall">
+  <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="group" value="all">
+  <button class="btn primary">Work through all {{ item_groups | map(attribute="rows") | map("length") | sum }} items in the Personal Data Reviewer</button>
+  <span class="muted small">One stack, in the order below. Each item's text is copied exactly into a new folder; the report then takes it only from what you extract there.</span>
+</form>
+{% endif %}
+{% for g in todo %}
+<details class="card todo" {{ "open" if loop.first or g.kind != "items" or g.rows | length <= 15 }}>
+  <summary><b>{{ g.title }}</b> <span class="pill {{ 'warn' if g.blocking else '' }}">{{ g.rows | length }}{% if g.kind == "files" %} file(s), {{ g.rows | sum(attribute="count") }} element(s){% endif %}</span>{% if not g.blocking %} <span class="muted small">doesn't keep it a draft, but check before release</span>{% endif %}</summary>
+  <p class="muted small">{{ g.hint }}</p>
+  {% if g.kind == "items" %}
+  <form method="post" action="{{ url_for('review.report_stack') }}" style="margin:0 0 8px">
+    <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="group" value="{{ g.title }}">
+    <button class="btn sm primary">Work through these {{ g.rows | length }} in the Personal Data Reviewer</button>
+  </form>
+  <table class="t">
+    <tr><th>Score</th><th>Item</th><th>Date</th><th></th></tr>
+    {% for r in g.rows %}
+    <tr><td>{{ r.score if r.score is not none else "–" }}</td>
+      <td><a href="{{ url_for('review.item', chunk_id=r.chunk_id) }}">{{ r.title }}</a>{% if r.from %}<div class="muted small">{{ r.from }}</div>{% endif %}{% if r.notes %}<div class="small note" style="margin:4px 0 0;padding:4px 8px">Note: {{ r.notes }}</div>{% endif %}</td>
+      <td class="small">{{ r.date }}</td>
+      <td class="small">{% if r.headers %}<span class="pill bad">email headers</span> {% endif %}{% if r.chars %}{{ "{:,}".format(r.chars) }} characters{% endif %}</td></tr>
+    {% endfor %}
+  </table>
+  {% elif g.kind == "files" %}
+  <table class="t">
+    <tr><th>Folder</th><th>File</th><th>Undecided</th></tr>
+    {% for r in g.rows %}
+    <tr><td class="small">{% if r.fid %}<a href="{{ url_for('tool_redaction.page', fid=r.fid) }}">{{ r.folder }}</a>{% else %}{{ r.folder }}{% endif %}</td><td class="mono">{{ r.file }}</td><td>{{ r.count }} element(s)</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <ul class="small">{% for r in g.rows %}<li class="mono">{{ r }}</li>{% endfor %}</ul>
+  {% endif %}
+</details>
+{% endfor %}
+
 {% if data.folder_rows %}
-<h2>Personal Data Reviewer folders</h2>
+<h3>Personal Data Reviewer folders</h3>
 <table class="t">
   <tr><th>Folder</th><th>In the report?</th><th></th></tr>
   {% for f in data.folder_rows %}
   <tr>
-    <td class="mono">{{ f.path.name }}{% if f.copy_of %}<div class="small warnline" style="font-family:inherit">Every file here is an exact copy of a file in <b>{{ f.copy_of.split('/')[-1] }}</b>.</div>{% endif %}</td>
+    <td class="mono">{% if fam.split %}{{ fam.review_ref }} › {% endif %}{{ f.path.name }}{% if f.copy_of %}<div class="small warnline" style="font-family:inherit">Every file here is an exact copy of a file in <b>{{ f.copy_of.split('/')[-1] }}</b>.</div>{% endif %}</td>
     <td>{% if f.included %}<span class="pill ok">included</span>{% else %}<span class="pill warn">left out</span><div class="small">{{ f.choice.reason }} ({{ f.choice.reviewer }}, {{ f.choice.at }})</div>{% endif %}</td>
     <td>
       <form method="post" action="{{ url_for('review.report_folder') }}">
@@ -39,49 +78,51 @@
   </tr>
   {% endfor %}
 </table>
-<p class="muted small">A folder left out adds nothing to the report and nothing to the outstanding list. The choice, the reason and your name go in the audit log.</p>
-{% endif %}
-
-{% if data.review.whole_from_workbook %}
-<div class="note">{{ data.review.whole_from_workbook | length }} extract(s) come from workbook “Disclose” decisions and are the whole passage. Open them in Review and choose the passages to narrow them.</div>
-{% endif %}
-
-{% if data.outstanding %}
-<h2>Outstanding</h2>
-<table class="t">
-  <tr><th>Item</th><th>Why</th></tr>
-  {% for o in data.outstanding[:200] %}
-  <tr><td>{% if o.chunk_id %}<a href="{{ url_for('review.item', chunk_id=o.chunk_id) }}">{{ o.chunk_id }}</a>{% if o.score is defined and o.score is not none %} <span class="muted small">score {{ o.score }}</span>{% endif %}{% else %}<span class="mono">{{ o.file }}</span>{% endif %}</td><td class="small">{{ o.why }}</td></tr>
-  {% endfor %}
-  {% if data.outstanding | length > 200 %}<tr><td colspan="2" class="muted">… and {{ data.outstanding | length - 200 }} more</td></tr>{% endif %}
-</table>
+<p class="muted small">A folder left out adds nothing to the report and nothing to the list above. The choice, the reason and your name go in the audit log.</p>
 {% endif %}
 
 <h2>Build</h2>
-<p class="small">Writes a Word copy of the template and the register into <span class="mono">{{ fam.main_ref }}/data/output/personal_data_report/</span>, read-only, with their SHA-256 in the audit log. Edit the Word copy for final wording, then save it as PDF for sending.</p>
-<button class="btn primary" id="build" {{ 'disabled' if not template_ok }}>Build {{ "draft " if data.outstanding or not fam.subject_name }}report</button>
+<p class="small">Writes a Word copy of the template and the private register into <span class="mono">{{ fam.main_ref }}/data/output/personal_data_report/</span>, read-only, with their SHA-256 in the audit log. Template: <span class="mono">{{ template }}</span></p>
+<button class="btn primary" id="build" {{ 'disabled' if not template_ok }}>Build {{ "draft " if blocking or not fam.subject_name }}report</button>
 <div id="result"></div>
-
 {% if builds %}
-<h2>Built so far</h2>
+<details class="small" style="margin-top:8px"><summary>Built so far ({{ builds | length }})</summary>
 <table class="t">
-  <tr><th>File</th><th></th></tr>
   {% for b in builds %}
   <tr><td class="mono">{{ b.name }}</td><td>{% if b.draft %}<span class="pill warn">draft</span> {% endif %}<a class="btn sm" href="{{ url_for('review.report_file', name=b.name) }}">Download copy</a></td></tr>
   {% endfor %}
-</table>
+</table></details>
 {% endif %}
 
-<h2>Preview ({{ data.extracts | length }})</h2>
-<table class="t">
-  <tr><th>#</th><th>Extracted data</th><th>Sources (private)</th></tr>
-  {% for e in data.extracts %}
-  <tr><td>{{ loop.index }}</td><td class="pre">{{ e.text }}</td>
-    <td class="small">{% for s in e.sources %}<div>{% if s.chunk_id %}<a href="{{ url_for('review.item', chunk_id=s.chunk_id) }}">{{ s.date[:10] or "undated" }} {{ s.source_type }}</a>{% else %}{{ s.date or "undated" }} {{ s.source_path.split('/')[-1] }}{% endif %}{% if s.span == "whole passage" %} <span class="pill warn">whole passage</span>{% endif %}</div>{% endfor %}</td></tr>
-  {% else %}
-  <tr><td colspan="3" class="muted">Nothing extracted yet.</td></tr>
-  {% endfor %}
-</table>
+<h2 id="preview">Preview</h2>
+<p class="muted small">The report as it would be built now, from the same template and data. Grey notes under each extract are for you only: they go in the private register, not the report.</p>
+{% if pv %}
+<div class="docpreview">
+  {% if blocking or not fam.subject_name %}<p class="draftline">DRAFT: not for release.</p>{% endif %}
+  {% for para in pv.intro %}<p class="{{ 'doctitle' if loop.first }}">{{ para }}</p>{% endfor %}
+  <table class="doctable">
+    {% for r in pv.rows %}
+    {% if r.kind == "header" %}<tr><th>{{ r.label }}</th><th>{{ r.value }}</th></tr>
+    {% else %}
+    <tr class="{{ r.kind }}"><td>{{ r.label }}</td>
+      <td>{% if r.kind == "placeholder" %}<span class="ph">{{ r.value }}</span>
+        {% else %}<div class="pre">{{ r.value }}</div>{% endif %}
+        {% if r.extract %}
+        <div class="src">
+          {% for s in r.extract.sources %}
+          <span>{% if s.chunk_id %}<a href="{{ url_for('review.item', chunk_id=s.chunk_id) }}">{{ s.date[:10] or "undated" }} · {{ s.subject or s.source_type }}</a>{% else %}{{ s.date or "undated" }} · {{ s.source_path.split('/')[-1] }}{% endif %}</span>{% if not loop.last %}; {% endif %}
+          {% endfor %}
+          {% if r.extract.sources | selectattr("span", "equalto", "whole passage") | list %} <span class="pill warn">whole passage</span>{% endif %}
+          {% if "\nFrom:" in "\n" ~ r.value or "\nTo:" in "\n" ~ r.value or "\nSubject:" in "\n" ~ r.value %} <span class="pill bad">email headers</span>{% endif %}
+          {% if r.extract.sources | length > 1 %} <span class="muted">({{ r.extract.sources | length }} sources, merged)</span>{% endif %}
+        </div>
+        {% endif %}
+      </td></tr>
+    {% endif %}
+    {% endfor %}
+  </table>
+</div>
+{% else %}<p class="muted">No preview without a template.</p>{% endif %}
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='toolbox.js') }}"></script>

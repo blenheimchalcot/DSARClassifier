@@ -105,10 +105,65 @@ def report_page():
     s = _settings()
     fam = cases.family(s)
     template = personal_data_report.template_path(fam.review_dir, fam.main_dir)
+    folders = _redaction_folders()
     with _conn() as conn:
-        data = personal_data_report.assemble(conn, _redaction_folders())
+        data = personal_data_report.assemble(conn, folders)
+        items = {r["chunk_id"]: r for r in disclosure.queue(conn, min_score=0, status="")["rows"]}
+        for cid, dec in disclosure.latest(conn).items():
+            if cid in items:
+                items[cid]["notes"] = dec.get("notes", "")
+    pv = personal_data_report.preview(template, fam.subject_name, data["extracts"]) if template.is_file() else None
     return render_template("report.html", data=data, template=template, template_ok=template.is_file(), fam=fam,
+                           todo=_left_to_process(data, items, folders, pv), pv=pv,
                            builds=personal_data_report.builds(fam.main_dir / "output"), error=request.args.get("error", ""))
+
+
+def _left_to_process(data: dict, items: dict, folders: dict[str, Path], pv: dict | None) -> list[dict]:
+    """What is left before the report is final, grouped by what the reviewer has to do."""
+    def item(cid, why=""):
+        r = items.get(cid, {})
+        return {"chunk_id": cid, "title": r.get("title") or cid, "date": (r.get("date") or "")[:10],
+                "score": r.get("score"), "from": r.get("from", ""), "why": why, "notes": r.get("notes", "")}
+
+    out = []
+    by = lambda prefix: [o for o in data["outstanding"] if o.get("why", "").startswith(prefix)]
+    groups = [
+        ("Not reviewed yet", "Open each and decide.", [item(o["chunk_id"]) for o in by("not reviewed")]),
+        ("Select the passages", "Workbook 'Disclose with redactions': the redactions were only written in notes. "
+         "Work through them in the Personal Data Reviewer, or open each in Review.",
+         [item(o["chunk_id"]) for o in by("workbook 'Disclose with redactions'")]),
+        ("Text changed since the decision", "Decide again on the current text.",
+         [item(o["chunk_id"]) for o in by("text changed")]),
+    ]
+    for title, hint, rows in groups:
+        if rows:
+            out.append({"title": title, "hint": hint, "kind": "items", "rows": rows, "blocking": True})
+    whole = []
+    for cid in data["review"]["whole_from_workbook"]:
+        text = next((p["text"] for p in data["review"]["pieces"] if p["chunk_id"] == cid), "")
+        whole.append({**item(cid), "headers": personal_data_report.has_headers(text), "chars": len(text)})
+    if whole:
+        whole.sort(key=lambda r: not r["headers"])
+        out.append({"title": "Narrow whole passages", "kind": "items", "rows": whole, "blocking": False,
+                    "hint": "Workbook 'Disclose' put the whole passage in the report. Narrow it to the subject's data in the "
+                            "Personal Data Reviewer (Leave out headers and other people's details). Those with email "
+                            "headers name other people."})
+    fids = {str(p): fid for fid, p in folders.items()}
+    files = []
+    for o in data["outstanding"]:
+        if "file" in o:
+            path = Path(o["file"])
+            files.append({"file": path.name, "folder": path.parent.name, "fid": fids.get(str(path.parent)),
+                          "count": int(o["why"].split()[0])})
+    if files:
+        out.append({"title": "Finish in the Personal Data Reviewer", "kind": "files", "rows": files, "blocking": True,
+                    "hint": "Decide every element (Extract, Leave out, Leave part out), or leave a whole folder out of "
+                            "the report below with a reason."})
+    if pv and pv["placeholders"]:
+        out.append({"title": "Complete the template", "kind": "text", "rows": pv["placeholders"], "blocking": True,
+                    "hint": "Fill these in the case's template (data/templates/) so every build has them, or in the Word "
+                            "copy after building."})
+    return out
 
 
 @bp.route("/report/build", methods=["POST"])
@@ -142,6 +197,33 @@ def report_folder():
     for out in fam.logs(s.output_dir):
         audit.AuditLog(out).append("report", "report folder", {**result, "request": fam.main_ref})
     return redirect(url_for("review.report_page"))
+
+
+@bp.route("/report/stack", methods=["POST"])
+def report_stack():
+    """Send outstanding items to a review stack folder and open it in the Personal Data Reviewer."""
+    s = _settings()
+    fam = cases.family(s)
+    wanted = request.form.get("group", "")
+    with _conn() as conn:
+        data = personal_data_report.assemble(conn, _redaction_folders())
+        items = {r["chunk_id"]: r for r in disclosure.queue(conn, min_score=0, status="")["rows"]}
+        groups = [g for g in _left_to_process(data, items, _redaction_folders(), None)
+                  if g["kind"] == "items" and (wanted == "all" or g["title"] == wanted)]
+        ids = [r["chunk_id"] for g in groups for r in g["rows"]]
+        if not ids:
+            return redirect(url_for("review.report_page", error="Nothing to send to the Personal Data Reviewer."))
+        try:
+            result = personal_data_report.send_to_reviewer(conn, fam.review_output, ids, records.reviewer())
+        except ValueError as exc:
+            return redirect(url_for("review.report_page", error=str(exc)))
+    entry = {**result, "files": len(result["files"]), "chunk_ids": ids, "groups": [g["title"] for g in groups],
+             "request": fam.main_ref}
+    for out in fam.logs(s.output_dir):
+        audit.AuditLog(out).append("report", "report review-stack", entry)
+    from dsar.toolbox.redaction import web
+    fid = web._fid(Path(result["folder"]))
+    return redirect(url_for("tool_redaction.page", fid=fid))
 
 
 @bp.route("/report/file/<name>")

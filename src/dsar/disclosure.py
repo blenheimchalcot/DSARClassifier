@@ -30,6 +30,10 @@ RELEASE_REDACTED = "Release in full with redactions"
 WITHHOLD = "Withhold (exemption applies)"
 NOT_SUBJECT = "Not the subject's personal data"
 DECISIONS = [EXTRACT, RELEASE, RELEASE_REDACTED, WITHHOLD, NOT_SUBJECT]
+# Set when an item is sent to the Personal Data Reviewer as part of a review stack
+# (personal_data_report.send_to_reviewer): its report content then comes only from
+# what is extracted there. Not offered as a choice on the Review page.
+IN_REVIEWER = "Reviewed in the Personal Data Reviewer"
 REASONS = [r for r in review.REASONS if r != "None"]
 ASSESSMENTS = review.ASSESSMENTS
 
@@ -261,6 +265,18 @@ def record(conn: sqlite3.Connection, chunk_id: str, data: dict, reviewer: str) -
             "spans": len(keep), "model_score": row["score"], "adjusted_score": adjusted, "reason": reason}
 
 
+def record_in_reviewer(conn: sqlite3.Connection, chunk_id: str, content_sha: str, file: str, reviewer: str) -> int:
+    """Mark an item as sent to the Personal Data Reviewer (append-only, like any decision)."""
+    row = conn.execute("SELECT cl.score FROM chunks c LEFT JOIN classifications cl ON cl.chunk_id = c.chunk_id "
+                       "WHERE c.chunk_id = ?", (chunk_id,)).fetchone()
+    cur = conn.execute(
+        "INSERT INTO decisions (chunk_id, content_sha256, model_score, decision, notes, reviewer, decided_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (chunk_id, content_sha, row["score"] if row else None, IN_REVIEWER, f"Review stack file: {file}", reviewer,
+         db._now()))
+    return cur.lastrowid
+
+
 def _paragraphs(text: str) -> str:
     """Tidy an extract: one line per paragraph, inner whitespace collapsed."""
     paras = [" ".join(p.split()) for p in re.split(r"\n\s*\n", text)]
@@ -288,6 +304,8 @@ def report_inputs(conn: sqlite3.Connection, min_score: int = MIN_SCORE) -> dict:
                 "subject": r["subject"] or "", "decision": dec["decision"], "decision_source": dec["source"],
                 "reviewer": dec["reviewer"], "decided_at": dec["at"], "content_sha256": content_sha256(content)}
         if dec["source"] == "app":
+            if dec["decision"] == IN_REVIEWER:
+                continue            # its extracts come from the review stack folder
             if dec.get("content_sha256") != base["content_sha256"]:
                 changed.append({"chunk_id": cid, "why": "text changed since the decision"})
                 continue

@@ -12,8 +12,9 @@
 <header class="topbar">
   <a class="brand" href="{{ url_for('main.home') }}">{{ settings.case_ref or "DSAR" }}<small>dsar {{ version }}</small></a>
   <nav>
-    <a href="{{ url_for('main.home') }}" class="{{ 'on' if request.endpoint == 'main.home' }}">Case</a>
-    {% if settings.case_bound %}<a href="{{ url_for('main.cases_page') }}" class="{{ 'on' if request.endpoint == 'main.cases_page' }}">Cases</a>
+    {% if settings.case_bound %}<a href="{{ url_for('main.cases_page') }}" class="{{ 'on' if request.endpoint == 'main.cases_page' }}">Cases</a>{% endif %}
+    <a href="{{ url_for('main.home') }}" class="{{ 'on' if request.endpoint == 'main.home' }}">{% if settings.case_bound %}Current case: <b>{{ settings.case_ref }}</b>{% else %}Home{% endif %}</a>
+    {% if settings.case_bound %}
     <a href="{{ url_for('review.queue') }}" class="{{ 'on' if request.endpoint in ('review.queue', 'review.item') }}">Review</a>
     <a href="{{ url_for('review.report_page') }}" class="{{ 'on' if request.endpoint == 'review.report_page' }}">Report</a>{% endif %}
     <a href="{{ url_for('main.toolbox_index') }}" class="{{ 'on' if request.endpoint == 'main.toolbox_index' }}">Toolbox</a>

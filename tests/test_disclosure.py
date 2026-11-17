@@ -2,6 +2,7 @@
 import csv
 import re
 import stat
+from pathlib import Path
 
 import docx
 import pytest
@@ -127,7 +128,8 @@ def test_report_merges_review_workbook_and_redaction_extracts_into_the_template(
                "decision": "release"})
 
     page = c.get("/report/").get_data(as_text=True)
-    assert "Outstanding" in page and "select the passages" in page
+    assert "Left to process" in page and "Select the passages" in page and 'id="preview"' in page
+    assert "Data Subject: </td>" in page or "Data Subject:" in page       # preview mirrors the template table
     r = c.post("/report/build", headers={"X-CSRF": c.csrf})
     j = r.get_json()
     assert j["success"] and j["draft"] and j["extracts"] == 3 and j["outstanding"] == 1
@@ -343,3 +345,45 @@ def test_everything_is_worked_from_the_main_case(case, family_case):
     assert (family_case / "output" / personal_data_report.OUT_DIR / j["report"]).is_file()
     home = c.get("/").get_data(as_text=True)
     assert "Release of DSAR-TEST-0" in home and 'href="/review/' in home
+
+
+def test_outstanding_items_are_stacked_for_the_personal_data_reviewer(case, template):
+    """Outstanding items go into a review stack folder; the report then takes them only from what is extracted there."""
+    from dsar.toolbox.redaction import markup
+
+    with db.connect(case / "dsar.sqlite") as conn:
+        conn.execute("INSERT INTO review_decisions (chunk_id, decision, reviewer, workbook, workbook_sha256, imported_at) "
+                     "VALUES ('b', 'Disclose', 'R', 'wb.xlsx', 'x', '2026-11-01T00:00:00+00:00')")
+    app, c = client_for(webapp.Settings.for_case(case))
+    page = c.get("/report/").get_data(as_text=True)
+    assert "Work through all" in page and "Narrow whole passages" in page and "Current case: <b>DSAR-TEST-1</b>" in page
+    assert page.index("Cases</a>") < page.index("Current case:")
+    r = c.post("/report/stack", data={"csrf": c.csrf, "group": "all"})
+    assert r.status_code == 302 and "/toolbox/redaction/f/" in r.headers["Location"]
+    stack = next((case / "output").glob(personal_data_report.STACK_PREFIX + "*"))
+    files = sorted(p.name for p in stack.glob("*.txt"))
+    # Not reviewed (a: 7, d: 8) and the whole passage from the workbook (b), each the item's exact text.
+    assert len(files) == 3 and files[0].startswith("01_") and all(f.endswith(("_a.txt", "_b.txt", "_d.txt")) for f in files)
+    b = next(stack.glob("*_b.txt"))
+    assert audit.sha256_file(b) == disclosure.content_sha256(TEXT_B)
+    with db.connect(case / "dsar.sqlite") as conn:
+        assert {k: v["decision"] for k, v in disclosure.latest(conn).items()} == {
+            k: disclosure.IN_REVIEWER for k in ("a", "b", "d")}
+        # Nothing comes from the database now, and the stack's undecided elements are what's left.
+        data = personal_data_report.assemble(conn, {"s": stack})
+        assert data["from_review"] == 0 and data["extracts"] == []
+        assert {Path(o["file"]).name for o in data["outstanding"]} == set(files)
+    f = markup.Folder(stack, "R", None)
+    for doc in f.docs():
+        for el in doc["elements"]:
+            f.act({"file": doc["name"], "sha256": doc["sha256"], "action": "decide", "element": el["id"],
+                   "decision": "release" if doc["name"].endswith("_b.txt") else "redact_full",
+                   "reason": markup.REASONS[0]})
+    with db.connect(case / "dsar.sqlite") as conn:
+        data = personal_data_report.assemble(conn, {"s": stack})
+        assert [e["text"] for e in data["extracts"]] == [" ".join(TEXT_B.split())] and data["outstanding"] == []
+        # Deciding b again in Review takes over: its stack file is then ignored, so nothing is counted twice.
+        disclosure.record(conn, "b", {"decision": disclosure.NOT_SUBJECT, "content_sha256": disclosure.content_sha256(TEXT_B)}, "R")
+        assert personal_data_report.assemble(conn, {"s": stack})["extracts"] == []
+    entry = audit.AuditLog(case / "output").entries()[-1]
+    assert entry["command"] == "report review-stack" and entry["data"]["items"] == 3

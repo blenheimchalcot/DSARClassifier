@@ -67,13 +67,78 @@ def _norm(text: str) -> str:
     return re.sub(r"\W+", " ", text).strip().lower()
 
 
-def redaction_pieces(folders: dict[str, Path]) -> tuple[list[dict], list[dict]]:
+STACK_PREFIX = "review_stack_"
+STACK_INDEX = "stack_index.json"
+
+
+def _slug(text: str, n: int = 50) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "-", text).strip("-")[:n] or "item"
+
+
+def send_to_reviewer(conn, output_dir: Path, chunk_ids: list[str], reviewer: str) -> dict:
+    """Write these items into a new review stack folder for the Personal Data Reviewer.
+
+    Each file is the item's text exactly (its SHA-256 equals the decision's content
+    hash), named <NN>_<date>_<title>_<chunk id>.txt in the given order. Each item gets
+    an IN_REVIEWER decision, so the report takes its content only from that folder.
+    """
+    import json
+
+    from dsar import report as results
+
+    if not reviewer:
+        raise ValueError("sign in first")
+    folder = Path(output_dir) / (STACK_PREFIX + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+    folder.mkdir(parents=True, exist_ok=False)
+    latest = disclosure.latest(conn)
+    index, written = {}, []
+    for n, cid in enumerate(dict.fromkeys(chunk_ids), start=1):
+        r = conn.execute("SELECT * FROM chunks WHERE chunk_id = ?", (cid,)).fetchone()
+        if r is None:
+            continue
+        try:
+            meta = json.loads(r["metadata_json"] or "{}")
+        except ValueError:
+            meta = {}
+        date = (results._sent_field(meta, r["source_type"]) or "")[:10] or "undated"
+        title = r["subject"] or Path(r["source_path"].replace("\\", "/")).name
+        name = f"{n:02d}_{date}_{_slug(title)}_{cid}.txt"
+        path = folder / name
+        path.write_text(r["content"] or "", encoding="utf-8")
+        sha = audit.sha256_file(path)
+        if sha != disclosure.content_sha256(r["content"] or ""):
+            raise ValueError(f"{name}: written file does not match the item's text")
+        did = disclosure.record_in_reviewer(conn, cid, sha, f"{folder.name}/{name}", reviewer)
+        prior = latest.get(cid) or {}
+        index[name] = {"chunk_id": cid, "sha256": sha, "decision_id": did, "previous_decision": prior.get("decision", ""),
+                       "previous_notes": prior.get("notes", ""), "previous_source": prior.get("source", "")}
+        written.append(name)
+    (folder / STACK_INDEX).write_text(json.dumps(index, indent=1), encoding="utf-8")
+    conn.commit()
+    return {"folder": str(folder), "items": len(written), "files": written,
+            "index_sha256": audit.sha256_file(folder / STACK_INDEX), "reviewer": reviewer}
+
+
+def _stack_skip(conn, path: Path) -> set[str]:
+    """Files in a review stack whose item has since been decided in Review (newest decision isn't IN_REVIEWER)."""
+    import json
+
+    idx = path / STACK_INDEX
+    if conn is None or not idx.is_file():
+        return set()
+    latest = disclosure.latest(conn)
+    return {name for name, v in json.loads(idx.read_text(encoding="utf-8")).items()
+            if latest.get(v["chunk_id"], {}).get("decision") != disclosure.IN_REVIEWER}
+
+
+def redaction_pieces(folders: dict[str, Path], conn=None) -> tuple[list[dict], list[dict]]:
     """Released passages from each redaction folder, and the undecided elements per file."""
     from dsar.toolbox.redaction import markup
 
     pieces, undecided = [], []
     for path in folders.values():
-        docs = markup.Folder(path, "", None).docs()
+        skip = _stack_skip(conn, path)
+        docs = [d for d in markup.Folder(path, "", None).docs() if d["name"] not in skip]
         for d in docs:
             left = len(d["elements"]) - len(d["decisions"])
             if left:
@@ -142,7 +207,7 @@ def assemble(conn, folders: dict[str, Path]) -> dict:
     excluded = [{"folder": str(r["path"]), **r["choice"]} for r in rows if not r["included"]]
     folders = {r["id"]: r["path"] for r in rows if r["included"]}
     review = disclosure.report_inputs(conn)
-    red_pieces, undecided = redaction_pieces(folders)
+    red_pieces, undecided = redaction_pieces(folders, conn)
     merged: dict[str, dict] = {}
     for p in review["pieces"] + red_pieces:
         key = _norm(p["text"])
@@ -223,6 +288,36 @@ def _fill(template: Path, subject_name: str, extracts: list[dict]):
         _set_cell(row.cells[0], f"Extract {n}:")
         _set_cell(row.cells[1], e["text"])
     return doc
+
+
+_HEADER_LINE = re.compile(r"^(From|To|Cc|Bcc|Sent|Date|Subject):", re.M)
+_EXTRACT_LABEL = re.compile(r"Extract(?:ed data)? (\d+):")
+
+
+def has_headers(text: str) -> bool:
+    """Email header lines in an extract: they usually name other people and need narrowing."""
+    return bool(_HEADER_LINE.search(text))
+
+
+def preview(template: Path, subject_name: str, extracts: list[dict]) -> dict:
+    """The report as it would be built now: intro paragraphs and table rows, from the same fill as build()."""
+    doc = _fill(template, subject_name, extracts)
+    intro = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+    rows = []
+    for i, row in enumerate(doc.tables[0].rows):
+        label, value = row.cells[0].text.strip(), row.cells[1].text.strip() if len(row.cells) > 1 else ""
+        m = _EXTRACT_LABEL.fullmatch(label)
+        if i == 0:
+            kind = "header"
+        elif m:
+            kind = "extract"
+        elif _PLACEHOLDER.search(value):
+            kind = "placeholder"
+        else:
+            kind = "field"
+        rows.append({"label": label, "value": value, "kind": kind,
+                     "extract": extracts[int(m.group(1)) - 1] if m else None})
+    return {"intro": intro, "rows": rows, "placeholders": placeholders(doc)}
 
 
 def placeholders(doc) -> list[str]:

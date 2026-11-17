@@ -58,3 +58,14 @@ table.kv th{width:110px}
 .row{display:flex;gap:16px;flex-wrap:wrap;margin:8px 0}
 .warnline{color:var(--warn)}
 td.pre{white-space:pre-wrap}
+.docpreview{background:#fff;color:#111;border:1px solid var(--line);border-radius:6px;padding:28px 32px;font:10pt/1.5 Arial,Helvetica,sans-serif;max-width:900px}
+.docpreview p{margin:0 0 8px;text-align:justify}.docpreview .doctitle{font-weight:700}
+.docpreview .draftline{color:#b00;font-weight:700}
+.doctable{border-collapse:collapse;width:100%;margin-top:10px}.doctable th,.doctable td{border:1px solid #999;padding:5px 8px;vertical-align:top;text-align:left}
+.doctable td:first-child{width:28%;font-weight:600}.doctable .pre{white-space:pre-wrap}
+.doctable .ph{background:#fff1b8;color:#7a5200;padding:0 3px}.doctable tr.placeholder td:first-child{color:#7a5200}
+.doctable .src{font:11px/1.4 -apple-system,sans-serif;color:#666;margin-top:6px;border-top:1px dashed #ccc;padding-top:4px}
+.doctable .src a{color:#2f5d8a}
+details.todo summary{cursor:pointer;list-style:none}details.todo summary::-webkit-details-marker{display:none}
+details.todo summary::before{content:"▸ ";color:var(--muted)}details.todo[open] summary::before{content:"▾ "}
+.stackall{margin:0 0 10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}

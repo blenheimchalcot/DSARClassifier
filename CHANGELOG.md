@@ -3,6 +3,8 @@
 ## 0.3.1 (unreleased)
 
 ### Changed
+- **Report page**: *Left to process*, grouped with titles, dates, scores and workbook notes, and a **Preview** laid out like the Word table. Outstanding items can be sent as a numbered **review stack** to the Personal Data Reviewer, to step through them there: each file is the item's exact text, and the report then takes them only from what is extracted.
+- Top bar: **Cases** first, then **Current case: <ref>**.
 - A request is worked entirely from its **main case**. Review, Report and the Personal Data Reviewer use the deeper search's database and folders directly, with no switching. Every change is logged in the main case and in the case holding the data. `dsar personal-data-report` works from the main case too.
 
 ## 0.3.0 (2026-11-17)
