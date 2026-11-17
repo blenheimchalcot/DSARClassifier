@@ -2,8 +2,8 @@
 The Personal Data Report: built from the case's decisions into the controller's template.
 
 Contents (extract text only; each piece of data once):
-  - passages extracted in the review queue (dsar.disclosure), and workbook
-    "Disclose" decisions taken as the whole passage;
+  - passages extracted in the review queue (dsar.disclosure) (workbook decisions
+    alone never put anything in);
   - passages released in the redaction tool's folders (markup.extracts).
 Identical extracts are merged. They are ordered by the source's date where one is
 known (a review item's sent date, or a YYYY-MM-DD in a redaction file's name),
@@ -198,6 +198,41 @@ def folder_rows(conn, folders: dict[str, Path]) -> list[dict]:
     return rows
 
 
+LEFT_OUT_MIN_CHARS = 25        # shorter left-out passages (a name, a greeting) are too common to compare
+# Left out because the text is in the report from elsewhere: not a conflict when it appears there.
+NOT_CONFLICTS = {"Duplicate – already in the Personal Data Report", "Already reviewed and assessed"}
+
+
+def left_out_passages(folders: dict[str, Path], conn=None) -> list[dict]:
+    """Every passage left out (in full or in part) in the Personal Data Reviewer folders, normalised."""
+    from dsar.toolbox.redaction import markup
+
+    out = []
+    for path in folders.values():
+        skip = _stack_skip(conn, path)
+        for d in markup.Folder(path, "", None).docs():
+            if d["name"] in skip:
+                continue
+            for dec in d["decisions"].values():
+                for r in dec["redactions"]:
+                    if r.get("reason") in NOT_CONFLICTS:
+                        continue
+                    norm = _norm(d["text"][r["start"]:r["end"]])
+                    if len(norm) >= LEFT_OUT_MIN_CHARS:
+                        out.append({"norm": norm, "file": str(path / d["name"])})
+    return out
+
+
+def conflict_with(piece: dict, left_out: list[dict]) -> str:
+    """The file whose left-out text this extract contains (from another source), or ''."""
+    text = _norm(piece["text"])
+    own = piece.get("source_path") if piece.get("origin") == "redaction" else None
+    for lo in left_out:
+        if lo["file"] != own and lo["norm"] in text:
+            return Path(lo["file"]).name
+    return ""
+
+
 def assemble(conn, folders: dict[str, Path]) -> dict:
     """Everything the report would contain now, merged and ordered, plus what is outstanding.
 
@@ -208,8 +243,18 @@ def assemble(conn, folders: dict[str, Path]) -> dict:
     folders = {r["id"]: r["path"] for r in rows if r["included"]}
     review = disclosure.report_inputs(conn)
     red_pieces, undecided = redaction_pieces(folders, conn)
-    merged: dict[str, dict] = {}
+    left_out = left_out_passages(folders, conn)
+    conflicts, kept = [], []
     for p in review["pieces"] + red_pieces:
+        hit = conflict_with(p, left_out)
+        if hit:
+            conflicts.append({"chunk_id": p.get("chunk_id"), "file": None if p.get("chunk_id") else p["source_path"],
+                              "why": f"conflict: contains text left out in the Personal Data Reviewer ({hit})",
+                              "text": p["text"]})
+        else:
+            kept.append(p)
+    merged: dict[str, dict] = {}
+    for p in kept:
         key = _norm(p["text"])
         if not key:
             continue
@@ -218,7 +263,7 @@ def assemble(conn, folders: dict[str, Path]) -> dict:
             entry["date"] = p["date"]
         entry["sources"].append(p)
     extracts = sorted(merged.values(), key=lambda e: (not e["date"], e["date"][:10]))
-    outstanding = review["outstanding"] + review["changed"] + undecided
+    outstanding = review["outstanding"] + review["changed"] + undecided + conflicts
     return {"extracts": extracts, "outstanding": outstanding, "review": review,
             "from_review": len(review["pieces"]), "from_redaction": len(red_pieces),
             "folders": [str(p) for p in folders.values()], "excluded_folders": excluded, "folder_rows": rows}
@@ -399,7 +444,8 @@ def build(conn, output_dir: Path, case_ref: str, subject_name: str, folders: dic
     result = {"report": str(report_path), "register": str(register_path), "draft": draft,
               "extracts": len(data["extracts"]), "from_review": data["from_review"],
               "from_redaction": data["from_redaction"], "outstanding": n_out,
-              "whole_passages_from_workbook": len(data["review"]["whole_from_workbook"]),
+              "workbook_disclose_awaiting_passages": len(data["review"]["whole_from_workbook"]),
+              "conflicts_held_out": sum(1 for o in data["outstanding"] if o["why"].startswith("conflict")),
               "decisions": data["review"]["decisions"], "redaction_folders": data["folders"],
               "excluded_folders": data["excluded_folders"],
               "sha256": {report_path.name: audit.sha256_file(report_path),

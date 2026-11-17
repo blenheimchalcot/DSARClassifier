@@ -187,10 +187,12 @@ def _computed(review_dir: Path, main_output: Path, folders: dict[str, Path]) -> 
     rows.append({"label": "Passages selected for workbook 'Disclose with redactions'", "done": need == 0,
                  "link": "review", "detail": f"{need} need passages" if need else "none left"})
     whole = len(data["review"]["whole_from_workbook"])
-    rows.append({"label": "Whole-passage extracts narrowed (headers and other people's details out)",
-                 "done": whole == 0, "link": "report",
-                 "detail": f"{whole} whole passage(s) from workbook 'Disclose'" if whole else "none"})
-    undecided = [o for o in data["outstanding"] if "file" in o]
+    rows.append({"label": "Passages chosen for workbook 'Disclose' items", "done": whole == 0, "link": "report",
+                 "detail": f"{whole} item(s): nothing from them is in the report yet" if whole else "none"})
+    held = sum(1 for o in data["outstanding"] if o["why"].startswith("conflict"))
+    rows.append({"label": "No extract contains text left out in the Personal Data Reviewer", "done": held == 0,
+                 "link": "report", "detail": f"{held} held out of the report" if held else "none"})
+    undecided = [o for o in data["outstanding"] if o.get("file") and not o["why"].startswith("conflict")]
     n = sum(int(o["why"].split()[0]) for o in undecided)
     rows.append({"label": "Personal Data Reviewer folders fully decided", "done": not undecided, "link": "report",
                  "detail": f"{n} element(s) undecided in {len(undecided)} file(s)" if undecided else

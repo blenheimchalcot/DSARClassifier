@@ -42,6 +42,13 @@
       <td class="small">{% if r.headers %}<span class="pill bad">email headers</span> {% endif %}{% if r.chars %}{{ "{:,}".format(r.chars) }} characters{% endif %}</td></tr>
     {% endfor %}
   </table>
+  {% elif g.kind == "conflicts" %}
+  <table class="t">
+    <tr><th>Item</th><th>Contains text left out in</th></tr>
+    {% for r in g.rows %}
+    <tr><td>{% if r.chunk_id %}<a href="{{ url_for('review.item', chunk_id=r.chunk_id) }}">{{ r.title }}</a>{% else %}<span class="mono">{{ r.title }}</span>{% endif %}<div class="muted small">{{ r.date }}</div></td><td class="mono small">{{ r.why }}</td></tr>
+    {% endfor %}
+  </table>
   {% elif g.kind == "files" %}
   <table class="t">
     <tr><th>Folder</th><th>File</th><th>Undecided</th></tr>

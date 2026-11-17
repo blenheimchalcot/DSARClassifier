@@ -10,10 +10,11 @@ range can never land on other text. Decisions are append-only (`decisions`,
 changed.
 
 Decisions imported from workbooks (`review_decisions`) keep their own wording and
-count as decided. For the report: a workbook "Disclose" is taken as the whole
-passage, flagged so it can be narrowed; a workbook "Disclose with redactions"
-recorded what to redact only in notes, so it stays outstanding until the passages
-are selected here.
+count as decided. Neither workbook "Disclose" nor "Disclose with redactions" puts
+anything in the report by itself: the workbook said nothing about which passages
+are the subject's data (a whole email carries headers, quoted threads and other
+people's details), so both stay outstanding until the passages are chosen here or
+in the Personal Data Reviewer.
 """
 import hashlib
 import json
@@ -317,7 +318,9 @@ def report_inputs(conn: sqlite3.Connection, min_score: int = MIN_SCORE) -> dict:
             elif dec["decision"] in (RELEASE, RELEASE_REDACTED):
                 documents.append({**base})
         elif dec["decision"] == WB_DISCLOSE:
-            pieces.append({**base, "text": _paragraphs(content), "span": "whole passage"})
+            # Never the whole passage: it carries headers, quoted threads and other people's
+            # details. Only passages chosen in Review or the Personal Data Reviewer go in.
+            outstanding.append({"chunk_id": cid, "why": "workbook 'Disclose': choose the passages", "score": r["score"]})
             whole.append(cid)
         elif dec["decision"] == WB_REDACT:
             outstanding.append({"chunk_id": cid, "why": "workbook 'Disclose with redactions': select the passages",

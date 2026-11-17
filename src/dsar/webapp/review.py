@@ -139,19 +139,29 @@ def _left_to_process(data: dict, items: dict, folders: dict[str, Path], pv: dict
         if rows:
             out.append({"title": title, "hint": hint, "kind": "items", "rows": rows, "blocking": True})
     whole = []
-    for cid in data["review"]["whole_from_workbook"]:
-        text = next((p["text"] for p in data["review"]["pieces"] if p["chunk_id"] == cid), "")
-        whole.append({**item(cid), "headers": personal_data_report.has_headers(text), "chars": len(text)})
+    for o in by("workbook 'Disclose'"):
+        r = items.get(o["chunk_id"], {})
+        whole.append(item(o["chunk_id"]))
     if whole:
-        whole.sort(key=lambda r: not r["headers"])
-        out.append({"title": "Narrow whole passages", "kind": "items", "rows": whole, "blocking": False,
-                    "hint": "Workbook 'Disclose' put the whole passage in the report. Narrow it to the subject's data in the "
-                            "Personal Data Reviewer (Leave out headers and other people's details). Those with email "
-                            "headers name other people."})
+        out.append({"title": "Choose the passages (workbook 'Disclose')", "kind": "items", "rows": whole,
+                    "blocking": True,
+                    "hint": "The workbook said 'Disclose' but not which passages are the subject's data, so nothing "
+                            "from these goes in yet. Work through them in the Personal Data Reviewer (Extract what is "
+                            "about the subject; Leave out headers, quoted threads and other people's details)."})
+    conflicts = [o for o in data["outstanding"] if o.get("why", "").startswith("conflict")]
+    if conflicts:
+        rows = [{**(item(o["chunk_id"]) if o.get("chunk_id") else {"chunk_id": None, "title": Path(o["file"]).name,
+                                                                       "date": "", "score": None, "from": "", "notes": ""}),
+                 "why": o["why"].split("(", 1)[-1].rstrip(")")} for o in conflicts]
+        out.insert(0, {"title": "Held out: conflicts with what you left out", "kind": "conflicts", "rows": rows,
+                       "blocking": True,
+                       "hint": "These extracts contain text you left out in the Personal Data Reviewer, so they are kept "
+                               "out of the report. Decide the item again (Review, or a review stack) so it no longer "
+                               "includes that text."})
     fids = {str(p): fid for fid, p in folders.items()}
     files = []
     for o in data["outstanding"]:
-        if "file" in o:
+        if o.get("file") and not o["why"].startswith("conflict"):
             path = Path(o["file"])
             files.append({"file": path.name, "folder": path.parent.name, "fid": fids.get(str(path.parent)),
                           "count": int(o["why"].split()[0])})

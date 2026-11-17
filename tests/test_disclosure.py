@@ -154,7 +154,7 @@ def test_report_merges_review_workbook_and_redaction_extracts_into_the_template(
         audit.sha256_file(report_path) and "template" in entry["data"]["sha256"]
 
 
-def test_workbook_disclose_is_whole_passage_and_changed_text_is_outstanding(case, template):
+def test_workbook_disclose_puts_nothing_in_and_changed_text_is_outstanding(case, template):
     with db.connect(case / "dsar.sqlite") as conn:
         conn.execute("INSERT INTO review_decisions (chunk_id, decision, reviewer, workbook, workbook_sha256, "
                      "imported_at) VALUES ('b', 'Disclose', 'R', 'wb.xlsx', 'x', '2026-11-01T00:00:00+00:00')")
@@ -162,7 +162,9 @@ def test_workbook_disclose_is_whole_passage_and_changed_text_is_outstanding(case
                                       "spans": [{"kind": "extract", "start": 0, "end": 11}]}, "R")
         conn.execute("UPDATE chunks SET content = 'changed' WHERE chunk_id = 'a'")
         data = disclosure.report_inputs(conn)
-    assert data["whole_from_workbook"] == ["b"] and data["pieces"][0]["text"] == TEXT_B
+    # A workbook "Disclose" never puts the whole passage in: it waits for passages to be chosen.
+    assert data["whole_from_workbook"] == ["b"] and data["pieces"] == []
+    assert {"chunk_id": "b", "why": "workbook 'Disclose': choose the passages", "score": 9} in data["outstanding"]
     assert [o["chunk_id"] for o in data["changed"]] == ["a"]
 
 
@@ -356,7 +358,7 @@ def test_outstanding_items_are_stacked_for_the_personal_data_reviewer(case, temp
                      "VALUES ('b', 'Disclose', 'R', 'wb.xlsx', 'x', '2026-11-01T00:00:00+00:00')")
     app, c = client_for(webapp.Settings.for_case(case))
     page = c.get("/report/").get_data(as_text=True)
-    assert "Work through all" in page and "Narrow whole passages" in page and "Current case: <b>DSAR-TEST-1</b>" in page
+    assert "Work through all" in page and "Choose the passages (workbook" in page and "Current case: <b>DSAR-TEST-1</b>" in page
     assert page.index("Cases</a>") < page.index("Current case:")
     r = c.post("/report/stack", data={"csrf": c.csrf, "group": "all"})
     assert r.status_code == 302 and "/toolbox/redaction/f/" in r.headers["Location"]
@@ -387,3 +389,28 @@ def test_outstanding_items_are_stacked_for_the_personal_data_reviewer(case, temp
         assert personal_data_report.assemble(conn, {"s": stack})["extracts"] == []
     entry = audit.AuditLog(case / "output").entries()[-1]
     assert entry["command"] == "report review-stack" and entry["data"]["items"] == 3
+
+
+def test_an_extract_containing_text_left_out_in_the_reviewer_is_held_out(case, template):
+    """The same text decided twice: left out in the Personal Data Reviewer, extracted in Review. It must not go in."""
+    from dsar.toolbox.redaction import markup
+
+    folder = case / "output" / "deep_dive"
+    folder.mkdir()
+    (folder / "01_2026-03-02_address.txt").write_text(TEXT_A)
+    f = markup.Folder(folder, "R", None)
+    doc = f.docs()[0]
+    for el in doc["elements"]:
+        f.act({"file": doc["name"], "sha256": doc["sha256"], "action": "decide", "element": el["id"],
+               "decision": "redact_full", "reason": markup.REASONS[0]})
+    with db.connect(case / "dsar.sqlite") as conn:
+        disclosure.record(conn, "a", {"decision": disclosure.EXTRACT, "content_sha256": disclosure.content_sha256(TEXT_A),
+                                      "spans": [{"kind": "extract", "start": 0, "end": len(TEXT_A)}]}, "R")
+        data = personal_data_report.assemble(conn, {"x": folder})
+    assert data["extracts"] == []
+    held = [o for o in data["outstanding"] if o["why"].startswith("conflict")]
+    assert [o["chunk_id"] for o in held] == ["a"] and "01_2026-03-02_address.txt" in held[0]["why"]
+    app, c = client_for(webapp.Settings.for_case(case))
+    page = c.get("/report/").get_data(as_text=True)
+    assert "Held out: conflicts with what you left out" in page
+    assert "No extract contains text left out" in c.get("/").get_data(as_text=True)
