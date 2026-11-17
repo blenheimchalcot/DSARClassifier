@@ -437,6 +437,24 @@ DUPLICATE = "Duplicate – already in the Personal Data Report"
 _DUP_REASONS = {DUPLICATE, "Already reviewed and assessed"}
 
 
+def decided_segments(text: str, el: dict, dec: dict) -> list[dict]:
+    """The element as decided: each stretch extracted or left out (with its reason), for showing the earlier decision."""
+    out = []
+    for i, (a, b) in enumerate(el["parts"]):
+        if i:
+            out.append({"text": "\n", "out": False})
+        if dec["decision"] == "redact_full":
+            out.append({"text": screen_text(text[a:b]), "out": True,
+                        "reason": dec["redactions"][0]["reason"] if dec["redactions"] else ""})
+            continue
+        for piece, r in redacted_text(text, a, b, dec["redactions"]):
+            if r is None:
+                out.append({"text": screen_text(piece), "out": False})
+            else:
+                out.append({"text": screen_text(text[max(r["start"], a):min(r["end"], b)]), "out": True, "reason": r["reason"]})
+    return out
+
+
 def repeat_sources(folders: list[tuple[Path, list[dict]]]) -> dict[str, dict]:
     """What a repeat of each decided text should get, keyed by exact text ("=") and normalised text ("~").
 
@@ -456,6 +474,10 @@ def repeat_sources(folders: list[tuple[Path, list[dict]]]) -> dict[str, dict]:
                 if not dec or not key:
                     continue
                 c = {"from": f"{path.name}/{d['name']}", "element": el["id"], "decision": dec["decision"], "text": raw[:1200],
+                     "was": {"decision": dec["decision"], "reasons": sorted({r["reason"] for r in dec["redactions"]}),
+                             "reviewer": dec["reviewer"], "ts": dec["ts"], "copied": bool(dec.get("copied_from")),
+                             "score": (el.get("score") or {}).get("score"),
+                             "segments": decided_segments(d["text"], el, dec)},
                      "redactions": dec["redactions"], "start": el["parts"][0][0], "single": len(el["parts"]) == 1}
                 for k in ("=" + raw, "~" + key) if len(key) >= REPEAT_MIN_CHARS else ("=" + raw,):
                     copies.setdefault(k, []).append(c)
@@ -503,7 +525,7 @@ def repeats_for(docs: list[dict], sources: dict[str, dict]) -> dict[str, dict]:
             if not src or src.get("ambiguous"):
                 continue
             info = {"from": src["from"], "element": src["element"], "decision": src["decision"], "kind": src["kind"],
-                    "text": screen_text(src.get("text", ""))}
+                    "text": screen_text(src.get("text", "")), "was": src.get("was", {})}
             if src["decision"] == "redact_full":
                 r = src["redactions"][0]
                 info.update(reason=r["reason"], note=r.get("note", ""))
@@ -761,7 +783,7 @@ main{padding:0 32px 64px;max-width:940px;width:100%}
 .why{font-size:11px;font-weight:600;color:var(--red);text-decoration:none;margin:0 4px;white-space:nowrap}
 .mark{background:var(--redbg);color:var(--red);text-decoration:line-through;cursor:pointer;border-radius:2px;outline:1px dashed var(--red)}
 .blk{background:#000;color:#fff;font-size:12px;padding:1px 6px;border-radius:2px;white-space:nowrap}
-.itemscore{background:var(--bg);border-left:3px solid var(--part,#c80);border-radius:6px;padding:8px 12px;margin:0 0 10px;font-size:14px}.itemscore .ev{font-size:12px;opacity:.75;margin-top:4px}.sect{display:flex;justify-content:space-between;align-items:center;width:100%;font-weight:600}.sect .cnt{font-weight:600;background:var(--bg);border-radius:99px;padding:0 8px;font-size:12px}.sect.on .cnt{color:var(--ink,#1d1d1b);background:#fff}.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0}.chip{border:1px solid var(--line);background:var(--panel);border-radius:99px;padding:2px 10px;font:inherit;font-size:12px;cursor:pointer}.chip.on{background:var(--accent,#2f5d8a);color:#fff;border-color:transparent}.chip.clear{opacity:.7}.filehead{margin:16px 0 6px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}.pair{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:start;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0;background:var(--panel)}.pair .ptxt{white-space:pre-wrap;font-size:14px;margin-top:4px}.pair .pbtn{display:flex;flex-direction:column;gap:6px}.form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;font-size:13px}.form.top{justify-content:flex-end;margin:8px 0 10px}.form.col{flex-direction:column;align-items:flex-end}.form .frow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end}.btn kbd{font:600 10px/1 var(--mono,monospace);border:1px solid currentColor;border-radius:3px;padding:1px 4px;margin-left:4px;opacity:.6}
+.itemscore{background:var(--bg);border-left:3px solid var(--part,#c80);border-radius:6px;padding:8px 12px;margin:0 0 10px;font-size:14px}.itemscore .ev{font-size:12px;opacity:.75;margin-top:4px}.sect{display:flex;justify-content:space-between;align-items:center;width:100%;font-weight:600}.sect .cnt{font-weight:600;background:var(--bg);border-radius:99px;padding:0 8px;font-size:12px}.sect.on .cnt{color:var(--ink,#1d1d1b);background:#fff}.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0}.chip{border:1px solid var(--line);background:var(--panel);border-radius:99px;padding:2px 10px;font:inherit;font-size:12px;cursor:pointer}.chip.on{background:var(--accent,#2f5d8a);color:#fff;border-color:transparent}.chip.clear{opacity:.7}.filehead{margin:16px 0 6px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}.pair{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:start;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0;background:var(--panel)}.pair .ptxt{white-space:pre-wrap;font-size:14px;margin-top:4px}.pair .pbtn{display:flex;flex-direction:column;gap:6px;max-width:240px;font-size:13px}.pair .own{display:flex;flex-direction:column;gap:4px}.pair .own .btn{font-size:13px;padding:3px 8px}.el.pair{display:grid}.pair .ph{font-weight:600;font-size:13px;display:flex;gap:8px;align-items:center;margin-bottom:4px}.pair .side{padding:8px;border-radius:6px}.pair .side.now{background:var(--bg)}.pair .win{background:#d9f2e0;border-radius:2px}.pair .wout{text-decoration:line-through;color:var(--red,#b3261e);background:#fbe3e1}.pair .why{font-size:11px;color:var(--red,#b3261e);margin:0 4px}.pair .side.was{background:var(--okbg,#e6f4ea);border-left:3px solid var(--ok,#2e7d4f)}.form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;font-size:13px}.form.top{justify-content:flex-end;margin:8px 0 10px}.form.col{flex-direction:column;align-items:flex-end}.form .frow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end}.btn kbd{font:600 10px/1 var(--mono,monospace);border:1px solid currentColor;border-radius:3px;padding:1px 4px;margin-left:4px;opacity:.6}
 .form select,.form input{padding:4px 6px;font:inherit;font-size:13px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px}.form input{flex:1;min-width:140px}
 mark{background:#ffe066;color:#000}
 .prior{font-size:13px;background:var(--partbg);color:var(--part);border-radius:6px;padding:4px 10px;margin-top:6px}
@@ -929,8 +951,14 @@ function renderSection(){const m=document.getElementById("main"),who=[];
  let last=null;
  for(const x of items.slice(0,300)){const key=x.fi+"|"+x.el.id;
   if(x.d.name!==last){h+=`<div class="filehead">${esc(x.d.name.replace(/\.txt$/,"").replace(/_/g," "))}${x.d.item&&x.d.item.score!=null?` · item score ${x.d.item.score}`:""}</div>`;last=x.d.name}
-  if(MODE==="repeats"&&openRow!==key){const r=x.rep;
-   h+=`<div class="pair" data-key="${key}"><div class="side"><div class="t">This element</div><div class="ptxt">${hl(txt(x))}</div></div><div class="side"><div class="t">${r.kind==="duplicate"?`Same text is already in the report (${esc(r.from)})`:`Same text decided in ${esc(r.from)}`}. Confirm records: <span class="badge ${r.decision}">${LABEL[r.decision]}</span>${r.reason?" "+esc(r.reason):""}</div><div class="ptxt">${hl(r.text||"")}</div></div><div class="pbtn"><button class="btn go" data-rep="ok">Confirm match</button><button class="btn" data-rep="no">Not a match</button></div></div>`;continue}
+  if(MODE==="repeats"&&openRow!==key&&full!==key&&edit?.el!==key){const r=x.rep;
+   const w=r.was||{},ms=s=>s==null?`<span class="sc lo">Model –</span>`:`<span class="sc ${s>=7?"hi":s>=5?"mid":"lo"}">Model ${s}</span>`;
+   h+=`<div class="el pair ${focus===key?"focus":""}" data-key="${key}" data-el="${key}">
+    <div class="side now"><div class="ph">Repeat · not yet decided ${ms(sc(x.el))}</div><div class="ptxt">${r.redactions?x.el.parts.map(([a,b])=>piece(x.d,a,b,r.redactions.map((m,i)=>({...m,i})),"rel",false)).join(" "):hl(txt(x))}</div>${r.redactions?`<div class="t">Struck text shows the cuts Confirm would apply.</div>`:""}</div>
+    <div class="side was"><div class="ph">✓ Your earlier decision ${ms(w.score)}</div>
+     <div class="t"><span class="badge ${w.decision}">${LABEL[w.decision]||""}</span>${(w.reasons||[]).length?" "+esc(w.reasons.join(", ")):""} · ${esc(w.reviewer||"")} ${esc((w.ts||"").slice(0,16).replace("T"," "))}${w.copied?" (copied)":""}<br>in ${esc(r.from)}</div>
+     <div class="ptxt">${(w.segments||[]).map(g=>g.out?`<span class="wout" title="${esc(g.reason||"")}">${esc(g.text)}</span><span class="why">[${esc(g.reason||"")}]</span>`:`<span class="win">${esc(g.text)}</span>`).join("")||hl(r.text||"")}</div></div>
+    <div class="pbtn"><div class="t">Confirm records for the repeat:<br><span class="badge ${r.decision}">${LABEL[r.decision]}</span>${r.reason?" "+esc(r.reason):""}</div><button class="btn go" data-rep="ok">Confirm match</button><button class="btn" data-rep="no">Not a match</button><div class="t" style="margin-top:6px">Or decide it yourself:</div><div class="own">${buttons("pending")}</div></div></div>`;continue}
   if(MODE==="done"&&openRow!==key&&focus!==key){h+=row(x.d,x.el).replace(`data-row="${x.el.id}"`,`data-row="${key}"`).replace("</div>",`${x.dec.copied_from?`<span class="t">copied from ${esc(x.dec.copied_from.split("#")[0])}</span>`:""}</div>`);continue}
   h+=cardHTML(x.d,x.el,key,who)}
  if(items.length>300)h+=`<p class="t">Showing the first 300; filter to see the rest.</p>`;
