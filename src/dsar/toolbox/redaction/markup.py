@@ -808,19 +808,22 @@ details.more .menu button{display:block;width:100%;text-align:left;border:0;back
 </style></head><body>
 <div class="app"><nav><div class="who" id="who"></div><div id="files"></div><button class="btn primary" id="ext" style="margin-top:16px;width:100%">Export Personal Data extracts</button><div id="extres" class="keys" style="margin-top:8px"></div></nav><main id="main"></main></div><div class="toast" id="toast"></div>
 <script>
-const TOKEN=new URLSearchParams(location.search).get("token")||(document.querySelector('meta[name="csrf"]')||{}).content,REASONS=__REASONS__,SUBJECT=(new URLSearchParams(location.search).get("subject")||"").toLowerCase();
+const PAGE_FID=(location.pathname.match(/\/f\/([0-9a-f]+)\//)||[])[1]||"",TOKEN=new URLSearchParams(location.search).get("token")||(document.querySelector('meta[name="csrf"]')||{}).content,REASONS=__REASONS__,SUBJECT=(new URLSearchParams(location.search).get("subject")||"").toLowerCase();
 const COLOURS=["#2f5d8a","#2e7d4f","#8a4b9c","#b5651d","#1f7a8c"];
 const LABEL={release:"Extracted",redact_full:"Left out",redact_partial:"Extracted in part",pending:"Not reviewed"};
 let DOCS=[],cur=0,view="original",q="",edit=null,full=null,split=null,minScore=-1,focus=null,lastReason=REASONS[0],doneOpen=false,openRow=null,REP={},repOpen=false,lowOpen=false,MODE="review",DISMISS=new Set(),F={rs:new Set(),ls:new Set(),dd:new Set(),ir:new Set(),hw:new Set(),rr:"",sb:""};
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const reasonOpts=()=>REASONS.map(x=>`<option>${esc(x)}</option>`).join("");
 function toast(m){const t=document.getElementById("toast");t.textContent=m;t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",3000)}
-async function load(keep){const j=await (await fetch("api/docs?token="+TOKEN)).json();DOCS=j.docs;REP=j.repeats||{};document.getElementById("who").innerHTML="Reviewer: <b>"+esc(j.reviewer)+"</b>"+(j.chain_ok?"":" · <span style='color:var(--red)'>event log chain broken</span>");if(!keep){cur=0;const P=new URLSearchParams(location.search),F=P.get("file"),E=P.get("el"),S=P.get("section");if(S&&SECTIONS[S])MODE=S;if(F){const i=DOCS.findIndex(d=>d.name===F);if(i>=0){MODE="file";cur=i;if(E){openRow=E;focus=E}}}}nav();render();if(!keep&&openRow)setTimeout(()=>goTo(openRow),60);if(!focus){const d=DOCS[cur];focus=(d.elements.find(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[d.name]||{})[e.id])||{}).id;render()}}
-async function act(body){Object.assign(body,{file:DOCS[cur].name,sha256:DOCS[cur].sha256});const r=await fetch("api/act",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify(body)});const j=await r.json();if(!r.ok){toast(j.error);return false}return true}
+function rk(d){return d.fid?d.fid+"/"+d.name:d.name}
+function fbase(d){return d&&d.fid&&d.fid!==PAGE_FID?"../"+d.fid+"/":""}
+async function load(keep){const j=await (await fetch("api/docs?all=1&token="+TOKEN)).json();
+ if(j.folders){DOCS=[];REP={};for(const f of j.folders){for(const d of f.docs){d.fid=f.fid;d.folder=f.label;DOCS.push(d)}for(const n in f.repeats)REP[f.fid+"/"+n]=f.repeats[n]}}else{DOCS=j.docs;REP=j.repeats||{}}document.getElementById("who").innerHTML="Reviewer: <b>"+esc(j.reviewer)+"</b>"+(j.chain_ok?"":" · <span style='color:var(--red)'>event log chain broken</span>");if(!keep){cur=Math.max(0,DOCS.findIndex(d=>d.fid===PAGE_FID));const P=new URLSearchParams(location.search),F=P.get("file"),E=P.get("el"),S=P.get("section");if(S&&SECTIONS[S])MODE=S;if(F){let i=DOCS.findIndex(d=>d.name===F&&(!d.fid||d.fid===PAGE_FID));if(i<0)i=DOCS.findIndex(d=>d.name===F);if(i>=0){MODE="file";cur=i;if(E){openRow=E;focus=E}}}}nav();render();if(!keep&&openRow)setTimeout(()=>goTo(openRow),60);if(!focus){const d=DOCS[cur];focus=(d.elements.find(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[rk(d)]||{})[e.id])||{}).id;render()}}
+async function act(body){Object.assign(body,{file:DOCS[cur].name,sha256:DOCS[cur].sha256});const r=await fetch(fbase(DOCS[cur])+"api/act",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify(body)});const j=await r.json();if(!r.ok){toast(j.error);return false}return true}
 function nav(){const f=document.getElementById("files");f.innerHTML="";const c=counts();
  for(const k in SECTIONS){const b=document.createElement("button");b.className="sect"+(MODE===k?" on":"");b.innerHTML=`${SECTIONS[k]}<span class="cnt">${c[k]}</span>`;b.onclick=()=>{MODE=k;q="";openRow=null;edit=null;full=null;split=null;focus=null;render();scrollTo(0,0)};f.appendChild(b)}
  const hd=document.createElement("div");hd.className="t";hd.style.margin="12px 0 4px";hd.textContent="By file";f.appendChild(hd);
- DOCS.forEach((d,i)=>{const n=Object.keys(d.decisions).length,nr=Object.keys(REP[d.name]||{}).length,tot=d.elements.filter(e=>(!e.blank&&!e.below)||d.decisions[e.id]).length,b=document.createElement("button");b.className=MODE==="file"&&i===cur?"on":"";b.innerHTML=esc(d.name.replace(/\.txt$/,"").replace(/_/g," "))+`<span class="prog">${d.item&&d.item.score!=null?`score ${d.item.score} · `:""}${n}/${tot} reviewed · ${d.redactions.length} passage(s) left out${nr?` · ${nr} repeat(s)`:""}</span>`;b.onclick=()=>{if(edit&&!confirm("Discard unsaved marks?"))return;MODE="file";cur=i;q="";edit=null;full=null;split=null;focus=(d.elements.find(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[d.name]||{})[e.id])||{}).id;nav();render();scrollTo(0,0)};f.appendChild(b)})}
+ let lastF=null;DOCS.forEach((d,i)=>{if(d.folder&&d.folder!==lastF){const fh=document.createElement("div");fh.className="t";fh.style.margin="10px 0 2px";fh.style.fontWeight="600";fh.textContent=d.folder;f.appendChild(fh);lastF=d.folder}const n=Object.keys(d.decisions).length,nr=Object.keys(REP[rk(d)]||{}).length,tot=d.elements.filter(e=>(!e.blank&&!e.below)||d.decisions[e.id]).length,b=document.createElement("button");b.className=MODE==="file"&&i===cur?"on":"";b.innerHTML=esc(d.name.replace(/\.txt$/,"").replace(/_/g," "))+`<span class="prog">${d.item&&d.item.score!=null?`score ${d.item.score} · `:""}${n}/${tot} reviewed · ${d.redactions.length} passage(s) left out${nr?` · ${nr} repeat(s)`:""}</span>`;b.onclick=()=>{if(edit&&!confirm("Discard unsaved marks?"))return;MODE="file";cur=i;q="";edit=null;full=null;split=null;focus=(d.elements.find(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[rk(d)]||{})[e.id])||{}).id;nav();render();scrollTo(0,0)};f.appendChild(b)})}
 function hl(s){let e=esc(s);if(q){const re=new RegExp("("+q.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+")","gi");e=e.replace(re,"<mark>$1</mark>")}return e}
 // One part [a,b] of an element, with redactions rs; cls is the class for released text
 function piece(d,a,b,rs,cls,editable){let out="",pos=a;const seg0=(x,y)=>`<span data-s="${x}" class="${cls}">${hl(d.text.slice(x,y))}</span>`;
@@ -871,7 +874,7 @@ function render(){if(MODE!=="file")return renderSection();const d=DOCS[cur],m=do
   cards[el.id]=cardHTML(d,el,el.id,who)}
  // Processed elements collapse into one bar at the top; the rest follow in document order.
  const active=id=>edit?.el===id||full===id||split?.el===id||openRow===id;
- const R=REP[d.name]||{},done=shown.filter(el=>d.decisions[el.id]),todo=shown.filter(el=>!d.decisions[el.id]&&!R[el.id]&&!el.below),reps=shown.filter(el=>!d.decisions[el.id]&&R[el.id]),low=shown.filter(el=>!d.decisions[el.id]&&el.below);
+ const R=REP[rk(d)]||{},done=shown.filter(el=>d.decisions[el.id]),todo=shown.filter(el=>!d.decisions[el.id]&&!R[el.id]&&!el.below),reps=shown.filter(el=>!d.decisions[el.id]&&R[el.id]),low=shown.filter(el=>!d.decisions[el.id]&&el.below);
  if(done.length){const cnt={};done.forEach(el=>{const k=d.decisions[el.id].decision;cnt[k]=(cnt[k]||0)+1});
   h+=`<div class="done"><button class="dbar" id="dtoggle">${doneOpen?"▾":"▸"} Processed: ${done.length}<span class="t">${Object.entries(cnt).map(([k,v])=>v+" "+LABEL[k].toLowerCase()).join(" · ")}</span><span class="sp"></span><span class="t">${doneOpen?"Hide":"Show to review or change"}</span></button>`;
   h+=doneOpen?done.map(el=>active(el.id)?cards[el.id]:row(d,el)).join(""):done.filter(el=>active(el.id)).map(el=>cards[el.id]).join("");
@@ -889,10 +892,10 @@ function render(){if(MODE!=="file")return renderSection();const d=DOCS[cur],m=do
  const dt=document.getElementById("dtoggle");if(dt)dt.onclick=()=>{doneOpen=!doneOpen;openRow=null;render()};
  const lt=document.getElementById("ltoggle");if(lt)lt.onclick=()=>{lowOpen=!lowOpen;openRow=null;render()};
  const rt=document.getElementById("rtoggle");if(rt)rt.onclick=()=>{repOpen=!repOpen;openRow=null;render()};
- const ar=document.getElementById("applyrep");if(ar)ar.onclick=async()=>{ar.disabled=true;const r=await fetch("api/apply-repeats",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:"{}"});const j=await r.json();if(!r.ok){toast(j.error||"Not applied");ar.disabled=false;return}toast(`Applied ${j.applied} decision(s)${j.failed?`, ${j.failed} need deciding by hand`:""}`);await load(true);nav()};
+ const ar=document.getElementById("applyrep");if(ar)ar.onclick=async()=>{ar.disabled=true;await applyRepeats(reps.map(el=>({fid:d.fid,file:d.name,element:el.id})))};
  document.getElementById("min").onchange=ev=>{minScore=+ev.target.value;render()};
- document.getElementById("exp").onclick=()=>window.open("export?token="+TOKEN+"&file="+encodeURIComponent(d.name),"_blank");
- document.getElementById("all").onclick=async()=>{const todo=d.elements.filter(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[d.name]||{})[e.id]);if(!todo.length||!confirm(`Extract ${todo.length} element(s) not yet reviewed, as they are?`))return;for(const e of todo)if(!await act({action:"decide",element:e.id,decision:"release"}))break;await load(true)};
+ document.getElementById("exp").onclick=()=>window.open(fbase(d)+"export?token="+TOKEN+"&file="+encodeURIComponent(d.name),"_blank");
+ document.getElementById("all").onclick=async()=>{const todo=d.elements.filter(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[rk(d)]||{})[e.id]);if(!todo.length||!confirm(`Extract ${todo.length} element(s) not yet reviewed, as they are?`))return;for(const e of todo)if(!await act({action:"decide",element:e.id,decision:"release"}))break;await load(true)};
  wire(m);
 }
 function wire(m){
@@ -924,14 +927,14 @@ function undecidedKey(k){const [fi,id]=splitKey(k);return !DOCS[fi].decisions[id
 // repeats: undecided, same text as a decided element | done: every decided element
 const SECTIONS={review:"To review (7+)",low:"6 and below",repeats:"Repeats",done:"Reviewed"};
 function sc(el){const s=el.score;return s&&s.score!=null?s.score:null}
-function pool(kind){const out=[];DOCS.forEach((d,fi)=>{const R=REP[d.name]||{};d.elements.forEach(el=>{if(el.blank&&!d.decisions[el.id])return;
+function pool(kind){const out=[];DOCS.forEach((d,fi)=>{const R=REP[rk(d)]||{};d.elements.forEach(el=>{if(el.blank&&!d.decisions[el.id])return;
  const dec=d.decisions[el.id],rep=!dec&&R[el.id]&&!DISMISS.has(fi+"|"+el.id);
  const k=dec?"done":rep?"repeats":el.below?"low":"review";if(k===kind)out.push({d,fi,el,dec,rep:rep?R[el.id]:null})})});return out}
 function counts(){const c={};for(const k in SECTIONS)c[k]=pool(k).length;return c}
 function chipRow(name,values,sel,label){return `<div class="chips"><span class="t">${label}</span>${values.map(v=>`<button class="chip ${sel.has(String(v))?"on":""}" data-chip="${name}" data-v="${v}">${v==="none"?"not scored":v}</button>`).join("")}<button class="chip clear" data-chip="${name}" data-v="*">all</button></div>`}
 function renderSection(){const m=document.getElementById("main"),who=[];
  let items=pool(MODE);
- let h=`<div class="bar"><b style="font-size:16px">${SECTIONS[MODE]}</b><span class="t">across all ${DOCS.length} file(s) in this folder</span><input type="search" id="q" placeholder="Search…" value="${esc(q)}"></div>`;
+ let h=`<div class="bar"><b style="font-size:16px">${SECTIONS[MODE]}</b><span class="t">across ${DOCS.length} file(s) in ${new Set(DOCS.map(d=>d.fid||"")).size} folder(s)</span><input type="search" id="q" placeholder="Search…" value="${esc(q)}"></div>`;
  const qq=q.toLowerCase(),txt=x=>x.el.parts.map(([a,b])=>x.d.text.slice(a,b)).join(" ");
  if(qq)items=items.filter(x=>txt(x).toLowerCase().includes(qq)||x.d.name.toLowerCase().includes(qq));
  if(MODE==="review"){const vals=[...new Set(pool("review").map(x=>sc(x.el)===null?"none":String(sc(x.el))))].sort();h+=chipRow("rs",vals,F.rs,"Model score");if(F.rs.size)items=items.filter(x=>F.rs.has(sc(x.el)===null?"none":String(sc(x.el))))}
@@ -950,7 +953,7 @@ function renderSection(){const m=document.getElementById("main"),who=[];
  h+=`<p class="t">${items.length} element(s)</p>`;
  let last=null;
  for(const x of items.slice(0,300)){const key=x.fi+"|"+x.el.id;
-  if(x.d.name!==last){h+=`<div class="filehead">${esc(x.d.name.replace(/\.txt$/,"").replace(/_/g," "))}${x.d.item&&x.d.item.score!=null?` · item score ${x.d.item.score}`:""}</div>`;last=x.d.name}
+  if(rk(x.d)!==last){h+=`<div class="filehead">${x.d.folder?esc(x.d.folder)+" › ":""}${esc(x.d.name.replace(/\.txt$/,"").replace(/_/g," "))}${x.d.item&&x.d.item.score!=null?` · item score ${x.d.item.score}`:""}</div>`;last=rk(x.d)}
   if(MODE==="repeats"&&openRow!==key&&full!==key&&edit?.el!==key){const r=x.rep;
    const w=r.was||{},ms=s=>s==null?`<span class="sc lo">Model –</span>`:`<span class="sc ${s>=7?"hi":s>=5?"mid":"lo"}">Model ${s}</span>`;
    h+=`<div class="el pair ${focus===key?"focus":""}" data-key="${key}" data-el="${key}">
@@ -969,10 +972,12 @@ function renderSection(){const m=document.getElementById("main"),who=[];
  const rs=document.getElementById("rsel");if(rs)rs.onchange=()=>{F.rr=rs.value;render()};const ss=document.getElementById("ssel");if(ss)ss.onchange=()=>{F.sb=ss.value;render()};
  m.querySelectorAll("[data-rep]").forEach(b=>b.onclick=async()=>{const key=b.closest(".pair").dataset.key,[fi,id]=splitKey(key);
   if(b.dataset.rep==="no"){DISMISS.add(key);render();return}
-  await applyRepeats([{file:DOCS[fi].name,element:id}])});
- const ca=document.getElementById("confirmall");if(ca)ca.onclick=async()=>{ca.disabled=true;await applyRepeats(items.map(x=>({file:x.d.name,element:x.el.id})))};
+  await applyRepeats([{fid:DOCS[fi].fid,file:DOCS[fi].name,element:id}])});
+ const ca=document.getElementById("confirmall");if(ca)ca.onclick=async()=>{ca.disabled=true;await applyRepeats(items.map(x=>({fid:x.d.fid,file:x.d.name,element:x.el.id})))};
  wire(m);nav()}
-async function applyRepeats(only){const r=await fetch("api/apply-repeats",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify({only})});const j=await r.json();if(!r.ok){toast(j.error||"Not applied");return}toast(`Recorded ${j.applied} decision(s)${j.failed?`, ${j.failed} need deciding by hand`:""}`);await load(true);nav()}
+async function applyRepeats(only){const by={};for(const o of only){(by[o.fid||""]=by[o.fid||""]||[]).push({file:o.file,element:o.element})}let n=0,bad=0;
+ for(const fid in by){const r=await fetch((fid&&fid!==PAGE_FID?"../"+fid+"/":"")+"api/apply-repeats",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify({only:by[fid]})});const j=await r.json();if(!r.ok){toast(j.error||"Not applied");return}n+=j.applied;bad+=j.failed}
+ toast(`Recorded ${n} decision(s)${bad?`, ${bad} need deciding by hand`:""}`);await load(true);nav()}
 function visibleIds(){return [...document.querySelectorAll("#main .el")].map(x=>x.dataset.el)}
 function goTo(id){if(!id)return;focus=id;document.querySelectorAll(".el.focus").forEach(y=>y.classList.remove("focus"));const x=document.querySelector(`.el[data-el="${id}"]`);if(x){x.classList.add("focus");x.scrollIntoView({block:"center",behavior:"smooth"})}}
 // After a decision, move to the next element not yet reviewed (in the current view and filter).

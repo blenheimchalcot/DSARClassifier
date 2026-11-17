@@ -89,7 +89,8 @@ def index():
         rows.append({"id": fid, "label": _label(path), "files": len(docs),
                      "events": sum(1 for _ in f.events.lines()) if f.events.path.exists() else 0,
                      "sections": markup.section_counts(docs, markup.repeats_for(docs, sources))})
-    return render_template("redaction/index.html", rows=rows, error=request.args.get("error", ""))
+    total = {k: sum(r["sections"][k] for r in rows) for k in ("review", "low", "repeats", "done")} if rows else None
+    return render_template("redaction/index.html", rows=rows, total=total, error=request.args.get("error", ""))
 
 
 @bp.route("/add", methods=["POST"])
@@ -143,6 +144,8 @@ def _repeats(f: markup.Folder, docs: list[dict]) -> dict:
 @bp.route("/f/<fid>/api/docs")
 def docs(fid):
     f = _folder(fid)
+    if request.args.get("all") and current_app.config["DSAR"].case_bound:
+        return jsonify(_all_folders(f))
     d = f.docs()
     shown = markup.screen_docs(d)
     for doc, item in zip(shown, _item_scores(f.folder, [x["name"] for x in d])):
@@ -150,6 +153,21 @@ def docs(fid):
             doc["item"] = item
     return jsonify({"reviewer": f.reviewer, "docs": shown, "chain_ok": f.events.verify(),
                     "repeats": _repeats(f, d)})
+
+
+def _all_folders(f: markup.Folder) -> dict:
+    """Every Personal Data Reviewer folder of the request, so the page's sections cover them all."""
+    loaded = [(fid, path, markup.Folder(path, records.reviewer(), _owner(path)).docs()) for fid, path in folders().items()]
+    sources = markup.repeat_sources([(path, docs) for _, path, docs in loaded])
+    out = []
+    for fid, path, docs in loaded:
+        shown = markup.screen_docs(docs)
+        for doc, item in zip(shown, _item_scores(path, [x["name"] for x in docs])):
+            if item:
+                doc["item"] = item
+        out.append({"fid": fid, "label": _label(path), "docs": shown, "repeats": markup.repeats_for(docs, sources),
+                    "chain_ok": markup.Folder(path, "", None).events.verify()})
+    return {"reviewer": f.reviewer, "folders": out, "chain_ok": all(x["chain_ok"] for x in out)}
 
 
 def _item_scores(folder: Path, names: list[str]) -> list[dict | None]:
