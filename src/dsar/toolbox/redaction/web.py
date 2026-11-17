@@ -1,5 +1,5 @@
 """
-Redaction tool inside the web app, mounted at /toolbox/redaction/.
+The Personal Data Reviewer (formerly the redaction tool) inside the web app, at /toolbox/redaction/.
 
 The same tool as `dsar markup serve` (markup.py: event log, decisions, export),
 with the signed-in reviewer as the reviewer. Folders offered:
@@ -90,7 +90,7 @@ def page(fid):
     head = f'<head><meta name="csrf" content="{html.escape(session.get("csrf", ""))}">'
     bar = (f'<body><div style="padding:6px 16px;font:13px -apple-system,sans-serif;border-bottom:1px solid #8884">'
            f'<a href="{url_for("main.home")}">{html.escape(s.case_ref or "DSAR")}</a> · '
-           f'<a href="{url_for(".index")}">Redaction</a> · {html.escape(str(f.folder.name))}'
+           f'<a href="{url_for(".index")}">Personal Data Reviewer</a> · {html.escape(str(f.folder.name))}'
            f'{" · <b>free-standing: not audit-logged</b>" if not s.case_bound else ""}</div>')
     return markup.APP_PAGE.replace("__REASONS__", json.dumps(markup.REASONS)).replace("<head>", head, 1).replace(
         "<body>", bar, 1)

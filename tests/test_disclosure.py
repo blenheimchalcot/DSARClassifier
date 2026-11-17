@@ -236,3 +236,79 @@ def test_a_redaction_folder_can_be_left_out_with_a_reason(case, template):
     assert [o["file"].split("/")[-2] for o in a["outstanding"] if "file" in o] == ["deep"]
     entry = audit.AuditLog(case / "output").entries()[-1]
     assert entry["command"] == "report folder" and entry["data"]["reason"] == "Copies of deep"
+
+
+@pytest.fixture
+def family_case(case, template):
+    """DSAR-TEST-1 as a deeper search (reviewed there) under a main case DSAR-TEST-0."""
+    main = case.parent.parent / "DSAR-TEST-0" / "data"
+    (main / "output").mkdir(parents=True)
+    audit.AuditLog(main / "output").append("note", "audit note", {"text": "main case"})
+    (case / "case.json").write_text('{"parent": "DSAR-TEST-0", "role": "deeper search", "review_here": true}')
+    return main
+
+
+def test_report_from_a_deeper_search_goes_to_the_main_case(case, family_case):
+    s = webapp.Settings.for_case(case)
+    assert s.parent_ref == "DSAR-TEST-0"
+    app, c = client_for(s)
+    assert "deeper search under" in c.get("/report/").get_data(as_text=True)
+    j = c.post("/report/build", headers={"X-CSRF": c.csrf}).get_json()
+    assert j["success"] and j["report"].startswith("Personal_Data_Report_DSAR-TEST-0_")
+    assert (family_case / "output" / personal_data_report.OUT_DIR / j["report"]).is_file()
+    for out in (family_case / "output", case / "output"):
+        assert audit.AuditLog(out).entries()[-1]["command"] == "report personal-data"
+    # In the main case, Review and Report point to the deeper search.
+    app, c = client_for(webapp.Settings.for_case(family_case))
+    assert "reviewed in DSAR-TEST-1" in c.get("/review/").get_data(as_text=True)
+    page = c.get("/cases/").get_data(as_text=True)
+    assert page.index("DSAR-TEST-0") < page.index("DSAR-TEST-1") and "main case" in page
+
+
+def test_release_checklist_deadline_and_confirmations_are_logged_in_the_main_case(case, family_case, monkeypatch):
+    from dsar.webapp import release
+
+    monkeypatch.delenv("DSAR_CASE_DOCS_ROOT", raising=False)
+    app, c = client_for(webapp.Settings.for_case(case))
+    page = c.get("/").get_data(as_text=True)
+    assert "Release of DSAR-TEST-0" in page and "Deadline unknown" in page and "Items scored 7+ decided" in page
+    r = c.post("/release/check", data={"csrf": c.csrf, "item": "received", "done": "1", "value": "20/10/2026"})
+    assert "error=" in r.headers["Location"]
+    c.post("/release/check", data={"csrf": c.csrf, "item": "received", "done": "1", "value": "2026-10-20"})
+    assert "Fri 20 Nov 2026" in c.get("/").get_data(as_text=True)
+    entry = audit.AuditLog(family_case / "output").entries()[-1]
+    assert entry["command"] == "release check" and entry["data"] == {"item": "received", "done": True,
+                                                                     "value": "2026-10-20", "reviewer": "Test Reviewer"}
+    import datetime as dt
+    assert release.one_month_after(dt.date(2026, 1, 31)) == dt.date(2026, 2, 28)
+
+
+def test_release_documents_are_checked_against_the_templates(case, family_case, tmp_path, monkeypatch):
+    from dsar.webapp import release
+
+    root = tmp_path / "docs"
+    (root / "DSAR-TEST-0" / "Templates").mkdir(parents=True)
+    (root / "DSAR-TEST-0" / "Output").mkdir()
+
+    def save(path, *paras):
+        d = docx.Document()
+        for p in paras:
+            d.add_paragraph(p)
+        d.save(path)
+
+    t, o = root / "DSAR-TEST-0" / "Templates", root / "DSAR-TEST-0" / "Output"
+    save(t / "Exemptions Report.docx", "Exemptions Report", "[Insert exemptions]")
+    save(t / "Data not in Scope.docx", "Data not in Scope")
+    save(t / "Subject Access Request - Final Response Letter Template.docx", "Dear [Name]")
+    save(o / "DSAR-TEST-0 Response Letter.docx", "Dear Sam", "Enclosed documents", "Exemptions Report",
+         "Data not in Scope", "Privacy Policy v1")
+    save(o / "Exemptions Report.docx", "Exemptions Report", "Search scope – confirm before sending")
+    (o / "Data not in Scope.docx").write_bytes((t / "Data not in Scope.docx").read_bytes())
+    monkeypatch.setenv("DSAR_CASE_DOCS_ROOT", str(root))
+    d = release.documents("DSAR-TEST-0", family_case / "output")
+    status = {r["document"]: r["status"] for r in d["rows"]}
+    assert status == {"Exemptions Report": "to complete", "Data not in Scope": "unchanged template",
+                      "Response letter": "ready"}
+    assert {e["name"]: e["present"] for e in d["enclosures"]} == {"Exemptions Report": True, "Data not in Scope": True,
+                                                                  "Privacy Policy v1": False}
+    assert not d["ready"]

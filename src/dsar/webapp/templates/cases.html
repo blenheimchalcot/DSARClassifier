@@ -9,7 +9,9 @@
   {% for c in rows %}
   {% set current = c.case_ref == settings.case_ref %}
   <tr>
-    <td><b>{{ c.case_ref }}</b>{% if current %} <span class="pill ok">open</span>{% endif %}<div class="mono muted">{{ c.data_dir }}</div></td>
+    <td{% if c.parent %} style="padding-left:28px"{% endif %}>{% if c.parent %}└ {% endif %}<b>{{ c.case_ref }}</b>{% if current %} <span class="pill ok">open</span>{% endif %}
+      {% if c.parent %}<div class="small">{{ c.role or "search" }} under {{ c.parent }}{% if c.review_here %} · review here{% endif %}</div>{% elif rows | selectattr("parent", "equalto", c.case_ref) | list %}<div class="small"><b>main case</b></div>{% endif %}
+      <div class="mono muted">{{ c.data_dir }}</div></td>
     <td>{{ c.subject or "" }}{% if not c.config %}<div class="muted small">no config.yaml in the case folder</div>{% endif %}</td>
     <td>
       {% if c.status == "ok" %}<span class="pill ok">chain intact</span> <span class="small">{{ c.entries }} entries</span>

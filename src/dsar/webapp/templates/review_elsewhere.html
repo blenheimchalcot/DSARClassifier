@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}Review{% endblock %}
+{% block content %}
+<h1>{{ fam.main_ref }}: reviewed in {{ fam.review_ref }}</h1>
+<p>This is the main case for the request. Its review and the Personal Data Report are worked in its deeper search, <b>{{ fam.review_ref }}</b>, which holds every item from this case's search as well. The report is saved here under <b>{{ fam.main_ref }}</b>.</p>
+<p><a class="btn primary" href="{{ url_for('main.cases_page') }}">Open {{ fam.review_ref }} from Cases</a></p>
+{% endblock %}

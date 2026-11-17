@@ -16,7 +16,7 @@ from pathlib import Path
 from flask import Blueprint, abort, current_app, jsonify, redirect, render_template, request, send_file, url_for
 
 from dsar import audit, db, disclosure, personal_data_report
-from dsar.webapp import records
+from dsar.webapp import cases, records
 
 bp = Blueprint("review", __name__)
 
@@ -45,9 +45,20 @@ def _redaction_folders() -> dict[str, Path]:
     return web.folders()
 
 
+def _elsewhere():
+    """In a main case reviewed in one of its searches, the page that says where to go."""
+    s = _settings()
+    fam = cases.family(s)
+    if fam.review_dir.resolve() != s.data_dir.resolve():
+        return render_template("review_elsewhere.html", fam=fam)
+    return None
+
+
 @bp.route("/review/")
 def queue():
     _settings()
+    if (page := _elsewhere()) is not None:
+        return page
     status = request.args.get("status", disclosure.TO_REVIEW)
     if status not in ("", disclosure.TO_REVIEW, disclosure.NEEDS_PASSAGES, disclosure.DONE):
         status = disclosure.TO_REVIEW
@@ -92,20 +103,25 @@ def decide(chunk_id):
 @bp.route("/report/")
 def report_page():
     s = _settings()
-    template = personal_data_report.template_path(s.data_dir)
+    if (page := _elsewhere()) is not None:
+        return page
+    fam = cases.family(s)
+    template = personal_data_report.template_path(s.data_dir, fam.main_dir)
     with _conn() as conn:
         data = personal_data_report.assemble(conn, _redaction_folders())
-    return render_template("report.html", data=data, template=template, template_ok=template.is_file(),
-                           builds=personal_data_report.builds(s.output_dir), error=request.args.get("error", ""))
+    return render_template("report.html", data=data, template=template, template_ok=template.is_file(), fam=fam,
+                           builds=personal_data_report.builds(fam.main_dir / "output"), error=request.args.get("error", ""))
 
 
 @bp.route("/report/build", methods=["POST"])
 def report_build():
     s = _settings()
     with _conn() as conn:
+        fam = cases.family(s)
         try:
-            result = personal_data_report.build(conn, s.output_dir, s.case_ref, s.subject_name,
-                                                _redaction_folders(), records.reviewer())
+            result = personal_data_report.build(conn, s.output_dir, fam.main_ref, s.subject_name,
+                                                _redaction_folders(), records.reviewer(),
+                                                report_output_dir=fam.main_dir / "output")
         except (FileNotFoundError, ValueError) as exc:
             return jsonify({"success": False, "error": str(exc)}), 400
     return jsonify({"success": True, **result, "report": Path(result["report"]).name,
@@ -131,7 +147,7 @@ def report_folder():
 @bp.route("/report/file/<name>")
 def report_file(name):
     s = _settings()
-    folder = s.output_dir / personal_data_report.OUT_DIR
+    folder = cases.family(s).main_dir / "output" / personal_data_report.OUT_DIR
     path = folder / name
     if path.parent != folder or not path.is_file() or not name.startswith("Personal_Data_Report_"):
         abort(404)

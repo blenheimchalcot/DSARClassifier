@@ -33,6 +33,8 @@ class Settings:
     subject_name: str = ""
     case_ref: str = ""
     cases_root: Path | None = None          # where the case picker looks (webapp.cases)
+    parent_ref: str = ""                    # set when this case is a deeper search under a main case
+    case_role: str = ""
 
     @property
     def case_bound(self) -> bool:
@@ -56,8 +58,11 @@ class Settings:
                 subject = ""
         case_ref = data_dir.parent.name if data_dir.name == "data" else data_dir.name
         kw.setdefault("cases_root", data_dir.parent.parent if data_dir.name == "data" else data_dir.parent)
+        from dsar.webapp.cases import read_link
+        link = read_link(data_dir)
         return cls(data_dir=data_dir, config_path=Path(config_path) if config_path else None,
-                   subject_name=subject, case_ref=case_ref, **kw)
+                   subject_name=subject, case_ref=case_ref, parent_ref=link.get("parent", ""),
+                   case_role=link.get("role", ""), **kw)
 
 
 def create_app(settings: Settings) -> Flask:

@@ -6,7 +6,7 @@
 |---|---|---|
 | Mail viewer | `src/dsar/toolbox/mailviewer/` | Browsing a PST or MBOX: folders, messages, attachments, search. Saving messages and attachments into the case, or a mailbox to Excel |
 | Teams viewer | `src/dsar/toolbox/teams/` | Teams chats in a PST: every conversation and participant, read in the browser, saved as a PDF transcript |
-| Redaction | `src/dsar/toolbox/redaction/` | Deciding, element by element, what is released and what is redacted, and exporting a redacted copy |
+| Personal Data Reviewer | `src/dsar/toolbox/redaction/` | Deciding, element by element, what is extracted into the Personal Data Report and what is left out (formerly *Redaction*; a redacted copy can still be exported) |
 
 The Mail and Teams viewers started as the separate PSTViewer project and now live here. They share `src/dsar/toolbox/mailbox/` (PST and MBOX reading). The app itself is `src/dsar/webapp/`.
 
@@ -32,6 +32,19 @@ The terminal prints a one-off address with a token. Open it, then **sign in with
 | Open attachment in another app | Not offered (it would copy subject data out of the case) | Offered on macOS, from a private temp folder deleted on exit |
 
 Use free-standing mode only for work that isn't a case, such as checking an export's structure.
+
+## Main case, deeper searches and the release checklist
+
+A request can have a **main case** (its reference, e.g. `DSAR-20261020-1`) and **deeper searches** under it (e.g. `DSAR-20261020-1-1`). A deeper search says so in `data/case.json`: `{"parent": "<main CASE-REF>", "role": "deeper search", "review_here": true}`. Cases lists it under its main case. With `review_here`, the request's Review and Report are worked in that search. The main case's Review and Report pages point there. The report is named with the main case's reference and saved in the main case's `output/personal_data_report/`, and each build is logged in both cases.
+
+The **case page** shows **Release of <main case>**: what is left before the response can go out.
+
+- **Deadline:** one calendar month from the date received (the same date next month, or that month's last day). If it falls on a weekend or bank holiday, the next working day.
+- **From the case:** items 7+ decided; passages selected for workbook *Disclose with redactions*; whole-passage extracts narrowed; Personal Data Reviewer folders fully decided; a final (not draft) report built.
+- **Release documents:** every template in `DSAR_CASE_DOCS_ROOT/<main case>/Templates` (else the shared `Templates/`) is a document the response needs. The prepared copy in `DSAR_CASE_DOCS_ROOT/<main case>/Output` is shown as *missing*, *unchanged template*, *to complete* (`[placeholders]`, INSERT guidance, "confirm before sending", "delete this …"), or *ready*. The Personal Data Report counts the app's latest build first. Every enclosure listed under *Enclosed documents* in the letter must be there. Files are only read. OneDrive online-only files are never opened from this page, because that would download them; keep the case folder on the device to have them checked.
+- **Confirmed by you:** date received, identity, extension, controller, search scope, open items, letter, Exemptions Report, Data not in Scope, enclosures, sent. Each Confirm or Undo is an audit entry (`release check`) in the main case with your name and what you entered.
+
+Set `DSAR_CASE_DOCS_ROOT` in `.env` (e.g. the OneDrive `DSAR` folder holding `<CASE-REF>/Templates` and `<CASE-REF>/Output`).
 
 ## Review and Personal Data Report
 
@@ -107,7 +120,7 @@ Shows each pipeline stage (manifest, attachments, ingest, provenance, ingest QA,
 - Conversations that include the data subject are starred. **People** lists each person with messages sent and received and their number of 1:1 partners. Click a person to filter the conversations. Meeting chats can list hundreds of people, because Purview records the whole meeting roster.
 - **Save PDF to case** writes a transcript: participants, thread ID, date range, the source file and its SHA-256, who produced it and when, then every message in time order. A message with no text (an image, call or reaction) is shown as such, never left out.
 
-## Redaction
+## Personal Data Reviewer (formerly Redaction)
 
 ### Preparing a folder
 

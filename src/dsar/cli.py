@@ -1039,6 +1039,7 @@ def personal_data_report_cmd(config_path: str | None, reviewer: str, run: audit.
     """
     from dsar import personal_data_report, webapp
     from dsar.toolbox.redaction import web as redaction_web
+    from dsar.webapp import cases
 
     data_dir = _data_dir()
     settings = webapp.Settings.for_case(data_dir, Path(config_path) if config_path else None)
@@ -1048,8 +1049,9 @@ def personal_data_report_cmd(config_path: str | None, reviewer: str, run: audit.
     folders = redaction_web.case_folders(settings.output_dir)
     with db.connect(db_path) as conn:
         db.init_schema(conn)
-        result = personal_data_report.build(conn, settings.output_dir, settings.case_ref, settings.subject_name,
-                                            folders, reviewer)
+        fam = cases.family(settings)
+        result = personal_data_report.build(conn, settings.output_dir, fam.main_ref, settings.subject_name,
+                                            folders, reviewer, report_output_dir=fam.main_dir / "output")
     click.echo(f"{'DRAFT ' if result['draft'] else ''}Personal Data Report: {result['report']}")
     click.echo(f"  {result['extracts']} extracts ({result['from_review']} from review, "
                f"{result['from_redaction']} from redaction), {result['outstanding']} outstanding, "

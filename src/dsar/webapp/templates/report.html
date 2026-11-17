@@ -1,22 +1,23 @@
 {% extends "base.html" %}
 {% block title %}Personal Data Report{% endblock %}
 {% block content %}
-<h1>Personal Data Report</h1>
-<p class="muted small">Built from the passages extracted in <a href="{{ url_for('review.queue') }}">Review</a> and those released in the <a href="{{ url_for('tool_redaction.index') }}">Redaction</a> tool's folders, into the template's table: extract text only, each piece once, oldest first. Every source of every extract goes in a private register beside the report, not in the report.</p>
+<h1>Personal Data Report{% if fam.main_ref != settings.case_ref %} · {{ fam.main_ref }}{% endif %}</h1>
+{% if fam.main_ref != settings.case_ref %}<p class="note">This is the deeper search under <b>{{ fam.main_ref }}</b>. The report is built from the decisions and Personal Data Reviewer folders here, named <b>{{ fam.main_ref }}</b> and saved in its output folder. The build is logged in both cases.</p>{% endif %}
+<p class="muted small">Built from the passages extracted in <a href="{{ url_for('review.queue') }}">Review</a> and those extracted in the <a href="{{ url_for('tool_redaction.index') }}">Personal Data Reviewer</a> folders, into the template's table: extract text only, each piece once, oldest first. Every source of every extract goes in a private register beside the report, not in the report.</p>
 
 {% if not settings.subject_name %}<div class="err">No data subject name: the case folder has no <span class="mono">config.yaml</span>. The report would be a draft with the name left blank.</div>{% endif %}
 {% if not template_ok %}<div class="err">Template not found: <span class="mono">{{ template }}</span>. Put <b>Personal Data Report.docx</b> there or set <span class="mono">DSAR_TEMPLATES_DIR</span>.</div>
 {% else %}<p class="small">Template: <span class="mono">{{ template }}</span></p>{% endif %}
 
 <div class="cards">
-  <div class="card"><b>{{ data.extracts | length }}</b><span class="muted small">extracts in the report ({{ data.from_review }} from review, {{ data.from_redaction }} from redaction; duplicates merged)</span></div>
+  <div class="card"><b>{{ data.extracts | length }}</b><span class="muted small">extracts in the report ({{ data.from_review }} from review, {{ data.from_redaction }} from the Personal Data Reviewer; duplicates merged)</span></div>
   <div class="card"><b>{{ data.outstanding | length }}</b><span class="muted small">outstanding: the report is a DRAFT until this is 0</span></div>
   <div class="card"><b>{{ data.review.documents | length }}</b><span class="muted small">items released as documents (in full or redacted): not in this report</span></div>
 </div>
 
 {% if error %}<div class="err">{{ error }}</div>{% endif %}
 {% if data.folder_rows %}
-<h2>Redaction folders</h2>
+<h2>Personal Data Reviewer folders</h2>
 <table class="t">
   <tr><th>Folder</th><th>In the report?</th><th></th></tr>
   {% for f in data.folder_rows %}
@@ -57,7 +58,7 @@
 {% endif %}
 
 <h2>Build</h2>
-<p class="small">Writes a Word copy of the template and the register into <span class="mono">output/personal_data_report/</span>, read-only, with their SHA-256 in the audit log. Edit the Word copy for final wording, then save it as PDF for sending.</p>
+<p class="small">Writes a Word copy of the template and the register into <span class="mono">{{ fam.main_ref }}/data/output/personal_data_report/</span>, read-only, with their SHA-256 in the audit log. Edit the Word copy for final wording, then save it as PDF for sending.</p>
 <button class="btn primary" id="build" {{ 'disabled' if not template_ok }}>Build {{ "draft " if data.outstanding or not settings.subject_name }}report</button>
 <div id="result"></div>
 

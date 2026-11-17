@@ -7,7 +7,7 @@ app (`dsar serve`, dsar.webapp) under /toolbox/<key>/; see docs/TOOLBOX.md.
 
   mailviewer  browse a PST or MBOX: folders, messages, attachments, search, Excel export
   teams       Teams chats in a PST: conversations, participants, transcript to PDF
-  redaction   mark up documents for release and export redacted copies (also `dsar markup`)
+  redaction   Personal Data Reviewer: extract the subject's personal data from documents (also `dsar markup`)
 
 Shared code: dsar.toolbox.mailbox (PST / MBOX reading, which mailboxes may be opened).
 """
@@ -40,6 +40,6 @@ TOOLS = [
          "dsar.toolbox.mailviewer.web"),
     Tool("teams", "Teams viewer", "Teams chats in a PST: every conversation and participant, read in the "
          "browser, and saved as a PDF transcript.", "dsar.toolbox.teams.web"),
-    Tool("redaction", "Redaction", "Decide, passage by passage, what is released and what is redacted, "
-         "and export a redacted copy with a redaction log.", "dsar.toolbox.redaction.web"),
+    Tool("redaction", "Personal Data Reviewer", "Go through documents passage by passage and decide what is "
+         "extracted into the Personal Data Report and what is left out, with a reason.", "dsar.toolbox.redaction.web"),
 ]

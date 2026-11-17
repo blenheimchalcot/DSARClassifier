@@ -49,12 +49,13 @@ def templates_dir() -> Path:
     return Path(env).expanduser() if env else Path(__file__).resolve().parents[2] / "Templates"
 
 
-def template_path(data_dir: Path | None = None) -> Path:
-    """The case's own template if it has one, else the shared one."""
-    if data_dir is not None:
-        own = Path(data_dir) / "templates" / TEMPLATE_NAME
-        if own.is_file():
-            return own
+def template_path(*data_dirs: Path | None) -> Path:
+    """The first of these cases' own templates that exists, else the shared one."""
+    for data_dir in data_dirs:
+        if data_dir is not None:
+            own = Path(data_dir) / "templates" / TEMPLATE_NAME
+            if own.is_file():
+                return own
     return templates_dir() / TEMPLATE_NAME
 
 
@@ -76,7 +77,7 @@ def redaction_pieces(folders: dict[str, Path]) -> tuple[list[dict], list[dict]]:
         for d in docs:
             left = len(d["elements"]) - len(d["decisions"])
             if left:
-                undecided.append({"file": str(path / d["name"]), "why": f"{left} element(s) undecided in the redaction tool"})
+                undecided.append({"file": str(path / d["name"]), "why": f"{left} element(s) undecided in the Personal Data Reviewer"})
         for item in markup.extracts(docs):
             for src in item["sources"]:
                 m = _DATE.search(src["file"])
@@ -84,7 +85,7 @@ def redaction_pieces(folders: dict[str, Path]) -> tuple[list[dict], list[dict]]:
                                "source_type": "document", "from": src["speaker"], "subject": "",
                                "source_path": str(path / src["file"]), "item_ref": src["element"],
                                "span": src["time"], "content_sha256": src["file_sha256"],
-                               "decision": src["decision"], "decision_source": "redaction tool",
+                               "decision": src["decision"], "decision_source": "Personal Data Reviewer",
                                "reviewer": src["reviewer"], "decided_at": src["decided"]})
     return pieces, undecided
 
@@ -261,9 +262,16 @@ def register_csv(extracts: list[dict]) -> bytes:
     return buf.getvalue().encode("utf-8")
 
 
-def build(conn, output_dir: Path, case_ref: str, subject_name: str, folders: dict[str, Path], reviewer: str) -> dict:
-    """Write the report and its private register into the case, read-only, and log them."""
-    template = template_path(Path(output_dir).parent)
+def build(conn, output_dir: Path, case_ref: str, subject_name: str, folders: dict[str, Path], reviewer: str,
+          report_output_dir: Path | None = None) -> dict:
+    """Write the report and its private register read-only, and log them.
+
+    output_dir / case_ref: the case whose decisions and folders are used. report_output_dir:
+    where the files go when that case is a deeper search under a main case (the files then
+    carry the main case's reference, passed as case_ref). Logged in both cases.
+    """
+    report_output_dir = Path(report_output_dir or output_dir)
+    template = template_path(Path(output_dir).parent, report_output_dir.parent)
     if not template.is_file():
         raise FileNotFoundError(f"Template not found: {template}. Put '{TEMPLATE_NAME}' there or set DSAR_TEMPLATES_DIR.")
     data = assemble(conn, folders)
@@ -278,7 +286,7 @@ def build(conn, output_dir: Path, case_ref: str, subject_name: str, folders: dic
         if left:
             bits.append(f"{len(left)} [placeholder](s) in the template still to complete")
         note = f"DRAFT: not for release. {'; '.join(bits)}."
-    out_dir = Path(output_dir) / OUT_DIR
+    out_dir = report_output_dir / OUT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     base = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     n = 1
@@ -302,8 +310,11 @@ def build(conn, output_dir: Path, case_ref: str, subject_name: str, folders: dic
               "sha256": {report_path.name: audit.sha256_file(report_path),
                          register_path.name: audit.sha256_file(register_path),
                          "template": audit.sha256_file(template)},
-              "template": str(template), "placeholders_left": left, "reviewer": reviewer}
-    audit.AuditLog(output_dir).append("report", "report personal-data", result)
+              "template": str(template), "placeholders_left": left, "reviewer": reviewer,
+              "decisions_from": str(Path(output_dir).parent)}
+    audit.AuditLog(report_output_dir).append("report", "report personal-data", result)
+    if report_output_dir.resolve() != Path(output_dir).resolve():
+        audit.AuditLog(output_dir).append("report", "report personal-data", result)
     return result
 
 

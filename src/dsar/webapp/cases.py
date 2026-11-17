@@ -26,6 +26,7 @@ starting case is never carried into another case.
 import json
 import secrets
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 from flask import current_app, session
@@ -33,6 +34,43 @@ from flask import current_app, session
 from dsar import audit
 
 _switch_lock = threading.Lock()
+LINK_NAME = "case.json"      # in a case's data/: {"parent": "<main CASE-REF>", "role": "...", "review_here": true}
+
+
+def read_link(data_dir: Path) -> dict:
+    """A deeper search's link to its main case (data/case.json), or {} for a main or standalone case."""
+    p = Path(data_dir) / LINK_NAME
+    if not p.is_file():
+        return {}
+    try:
+        link = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return link if isinstance(link, dict) else {}
+
+
+@dataclass
+class Family:
+    """One request: its main case, the searches under it, and the case where it is reviewed."""
+    main_ref: str
+    main_dir: Path
+    review_ref: str
+    review_dir: Path
+    children: list[dict]
+
+
+def family(settings) -> Family:
+    """Work out the request the current case belongs to. The report and the release checklist live in
+    the main case; review happens in the search marked review_here (else in the main case)."""
+    main_ref, main_dir = settings.case_ref, settings.data_dir
+    if settings.parent_ref and settings.cases_root:
+        parent = Path(settings.cases_root) / settings.parent_ref / "data"
+        if (parent / "output").is_dir():
+            main_ref, main_dir = settings.parent_ref, parent
+    children = [c for c in discover(settings.cases_root) if c.get("parent") == main_ref]
+    review = next((c for c in children if c.get("review_here")), None)
+    return Family(main_ref, main_dir, review["case_ref"] if review else main_ref,
+                  review["data_dir"] if review else main_dir, children)
 
 
 class CaseError(Exception):
@@ -43,12 +81,20 @@ def discover(root: Path | None) -> list[dict]:
     """Every case data dir under `root`, sorted by case reference."""
     if root is None or not Path(root).is_dir():
         return []
-    out = []
+    found = []
     for case_dir in sorted(Path(root).iterdir(), key=lambda p: p.name.casefold()):
         data = case_dir / "data"
         if case_dir.name.startswith((".", "_")) or not (data / "output").is_dir():
             continue
-        out.append(describe(data))
+        found.append(describe(data))
+    # Deeper searches are listed straight after their main case.
+    refs = {c["case_ref"] for c in found}
+    out = []
+    for c in found:
+        if c["parent"] and c["parent"] in refs:
+            continue
+        out.append(c)
+        out += [k for k in found if k["parent"] == c["case_ref"]]
     return out
 
 
@@ -68,7 +114,9 @@ def describe(data_dir: Path) -> dict:
         status = "problems" if problems else "ok"
     else:
         status = "legacy"
+    link = read_link(data_dir)
     return {"case_ref": s.case_ref, "data_dir": data_dir, "subject": s.subject_name,
+            "parent": link.get("parent", ""), "role": link.get("role", ""), "review_here": bool(link.get("review_here")),
             "config": s.config_path is not None, "entries": entries, "last": last,
             "status": status, "problems": problems, "legacy_md": log.md.is_file()}
 
@@ -97,6 +145,7 @@ def switch(case_ref: str, reviewer: str, confirm_legacy: bool = False) -> dict:
         old_ref = s.case_ref
         s.data_dir, s.config_path = new.data_dir, new.config_path
         s.subject_name, s.case_ref = new.subject_name, new.case_ref
+        s.parent_ref, s.case_role = new.parent_ref, new.case_role
         s.markup_folders = []          # --markup-folder belonged to the starting case
         data = {"reviewer": reviewer, "from_case": old_ref, "data_dir": str(s.data_dir),
                 "audit_log": target["status"]}

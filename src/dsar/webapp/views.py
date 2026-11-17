@@ -9,8 +9,30 @@ bp = Blueprint("main", __name__)
 @bp.route("/")
 def home():
     s = current_app.config["DSAR"]
-    info = case.summary(s.output_dir) if s.case_bound else None
-    return render_template("home.html", info=info)
+    info = rel = fam = None
+    if s.case_bound:
+        info = case.summary(s.output_dir)
+        fam = cases.family(s)
+        from dsar.toolbox.redaction import web as redaction_web
+        from dsar.webapp import release
+        folders = redaction_web.case_folders(fam.review_dir / "output")
+        rel = release.status(fam, folders)
+    return render_template("home.html", info=info, rel=rel, fam=fam, error=request.args.get("error", ""))
+
+
+@bp.route("/release/check", methods=["POST"])
+def release_check():
+    from dsar.webapp import release
+
+    s = current_app.config["DSAR"]
+    if not s.case_bound:
+        abort(404)
+    try:
+        release.record(cases.family(s).main_dir / "output", request.form.get("item", ""),
+                       request.form.get("done") == "1", request.form.get("value", ""), records.reviewer())
+    except ValueError as exc:
+        return redirect(url_for("main.home", error=str(exc)) + "#release")
+    return redirect(url_for("main.home") + "#release")
 
 
 @bp.route("/cases/")
