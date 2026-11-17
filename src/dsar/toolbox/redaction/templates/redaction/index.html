@@ -2,15 +2,17 @@
 {% block title %}Personal Data Reviewer{% endblock %}
 {% block content %}
 <h1>Personal Data Reviewer</h1>
-<p class="muted">Choose a folder of UTF-8 <code>.txt</code> files to mark up. Each decision is saved as you make it, under your name, in the folder's <code>markup_events.jsonl</code>. See docs/TOOLBOX.md.</p>
+<p class="muted">Click a number to open that section of the folder (every file at once), or the folder name to go file by file. Choose a folder of UTF-8 <code>.txt</code> files to mark up. Each decision is saved as you make it, under your name, in the folder's <code>markup_events.jsonl</code>. See docs/TOOLBOX.md.</p>
 {% if error %}<div class="err">{{ error }}</div>{% endif %}
 <table class="t">
-  <tr><th>Folder</th><th>.txt files</th><th>Recorded events</th><th></th></tr>
+  <tr><th>Folder</th><th>Files</th><th>To review (7+)</th><th>6 and below</th><th>Repeats</th><th>Reviewed</th></tr>
   {% for r in rows %}
-  <tr><td class="mono">{{ r.label }}</td><td>{{ r.files }}</td><td>{{ r.events }}</td>
-    <td><a class="btn sm primary" href="{{ url_for('.page', fid=r.id) }}">Open</a></td></tr>
+  <tr><td class="mono"><a href="{{ url_for('.page', fid=r.id) }}">{{ r.label }}</a></td><td>{{ r.files }}</td>
+    {% for k in ("review", "low", "repeats", "done") %}
+    <td>{% if r.sections[k] %}<a class="btn sm{{ ' primary' if k in ('review', 'repeats') }}" href="{{ url_for('.page', fid=r.id, section=k) }}">{{ r.sections[k] }}</a>{% else %}<span class="muted">0</span>{% endif %}</td>
+    {% endfor %}</tr>
   {% else %}
-  <tr><td colspan="4" class="muted">{% if settings.case_bound %}No folder under the case output/ holds .txt files yet. Copy the documents to review into, for example, <code>output/deep_dive_&lt;date&gt;/</code>.{% else %}No folders yet. Add one below, or start with <code>--markup-folder</code>.{% endif %}</td></tr>
+  <tr><td colspan="6" class="muted">{% if settings.case_bound %}No folder under the case output/ holds .txt files yet. Copy the documents to review into, for example, <code>output/deep_dive_&lt;date&gt;/</code>.{% else %}No folders yet. Add one below, or start with <code>--markup-folder</code>.{% endif %}</td></tr>
   {% endfor %}
 </table>
 {% if not settings.case_bound %}

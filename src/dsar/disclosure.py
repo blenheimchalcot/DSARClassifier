@@ -41,7 +41,7 @@ ASSESSMENTS = review.ASSESSMENTS
 # Workbook decisions (dsar.review.DECISIONS) and what they mean for the report.
 WB_DISCLOSE, WB_REDACT, WB_WITHHOLD, WB_NOT_SUBJECT = review.DECISIONS
 
-TO_REVIEW, NEEDS_PASSAGES, DONE = "To review", "Needs passages", "Done"
+TO_REVIEW, NEEDS_PASSAGES, DONE = "To review", "Choose what to extract", "Done"
 
 
 class DecisionError(ValueError):

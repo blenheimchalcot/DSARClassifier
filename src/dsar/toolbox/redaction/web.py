@@ -82,11 +82,13 @@ def _folder(fid: str) -> markup.Folder:
 def index():
     s = current_app.config["DSAR"]
     rows = []
-    for fid, path in folders().items():
+    loaded = {fid: (path, markup.Folder(path, "", None).docs()) for fid, path in folders().items()}
+    sources = markup.repeat_sources(list(loaded.values()))
+    for fid, (path, docs) in loaded.items():
         f = markup.Folder(path, "", None)
-        label = _label(path)
-        rows.append({"id": fid, "label": label, "files": len(f.files()),
-                     "events": sum(1 for _ in f.events.lines()) if f.events.path.exists() else 0})
+        rows.append({"id": fid, "label": _label(path), "files": len(docs),
+                     "events": sum(1 for _ in f.events.lines()) if f.events.path.exists() else 0,
+                     "sections": markup.section_counts(docs, markup.repeats_for(docs, sources))})
     return render_template("redaction/index.html", rows=rows, error=request.args.get("error", ""))
 
 

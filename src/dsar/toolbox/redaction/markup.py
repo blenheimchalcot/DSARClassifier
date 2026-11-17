@@ -403,6 +403,24 @@ def below_threshold(el: dict) -> bool:
     return s.get("score") is not None and s["score"] < REVIEW_MIN_SCORE
 
 
+def section_counts(docs: list[dict], repeats: dict[str, dict]) -> dict[str, int]:
+    """How many elements are in each Reviewer section (same rules as the page)."""
+    c = {"review": 0, "low": 0, "repeats": 0, "done": 0}
+    for d in docs:
+        for el in d["elements"]:
+            if el["id"] in d["decisions"]:
+                c["done"] += 1
+            elif el.get("blank"):
+                continue
+            elif el["id"] in repeats.get(d["name"], {}):
+                c["repeats"] += 1
+            elif el.get("below"):
+                c["low"] += 1
+            else:
+                c["review"] += 1
+    return c
+
+
 def undecided_count(doc: dict) -> int:
     return sum(1 for el in doc["elements"]
                if el["id"] not in doc["decisions"] and not el.get("blank") and not el.get("below"))
@@ -775,7 +793,7 @@ let DOCS=[],cur=0,view="original",q="",edit=null,full=null,split=null,minScore=-
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const reasonOpts=()=>REASONS.map(x=>`<option>${esc(x)}</option>`).join("");
 function toast(m){const t=document.getElementById("toast");t.textContent=m;t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",3000)}
-async function load(keep){const j=await (await fetch("api/docs?token="+TOKEN)).json();DOCS=j.docs;REP=j.repeats||{};document.getElementById("who").innerHTML="Reviewer: <b>"+esc(j.reviewer)+"</b>"+(j.chain_ok?"":" · <span style='color:var(--red)'>event log chain broken</span>");if(!keep){cur=0;const P=new URLSearchParams(location.search),F=P.get("file"),E=P.get("el");if(F){const i=DOCS.findIndex(d=>d.name===F);if(i>=0){MODE="file";cur=i;if(E){openRow=E;focus=E}}}}nav();render();if(!keep&&openRow)setTimeout(()=>goTo(openRow),60);if(!focus){const d=DOCS[cur];focus=(d.elements.find(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[d.name]||{})[e.id])||{}).id;render()}}
+async function load(keep){const j=await (await fetch("api/docs?token="+TOKEN)).json();DOCS=j.docs;REP=j.repeats||{};document.getElementById("who").innerHTML="Reviewer: <b>"+esc(j.reviewer)+"</b>"+(j.chain_ok?"":" · <span style='color:var(--red)'>event log chain broken</span>");if(!keep){cur=0;const P=new URLSearchParams(location.search),F=P.get("file"),E=P.get("el"),S=P.get("section");if(S&&SECTIONS[S])MODE=S;if(F){const i=DOCS.findIndex(d=>d.name===F);if(i>=0){MODE="file";cur=i;if(E){openRow=E;focus=E}}}}nav();render();if(!keep&&openRow)setTimeout(()=>goTo(openRow),60);if(!focus){const d=DOCS[cur];focus=(d.elements.find(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[d.name]||{})[e.id])||{}).id;render()}}
 async function act(body){Object.assign(body,{file:DOCS[cur].name,sha256:DOCS[cur].sha256});const r=await fetch("api/act",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify(body)});const j=await r.json();if(!r.ok){toast(j.error);return false}return true}
 function nav(){const f=document.getElementById("files");f.innerHTML="";const c=counts();
  for(const k in SECTIONS){const b=document.createElement("button");b.className="sect"+(MODE===k?" on":"");b.innerHTML=`${SECTIONS[k]}<span class="cnt">${c[k]}</span>`;b.onclick=()=>{MODE=k;q="";openRow=null;edit=null;full=null;split=null;focus=null;render();scrollTo(0,0)};f.appendChild(b)}
