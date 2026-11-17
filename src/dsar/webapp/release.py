@@ -131,7 +131,7 @@ def documents(main_ref: str, main_output: Path) -> dict:
             if r is not None:
                 enclosures.append({"name": line, "present": bool(r["file"]), "file": r["file"]})
                 continue
-            hit = next((p for p in prepared if _norm(line) in _norm(p.stem)), None)
+            hit = next((p for p in prepared if _norm(line) in _norm(p.stem) or (len(_norm(p.stem)) >= 8 and _norm(p.stem) in _norm(line))), None)
             enclosures.append({"name": line, "present": bool(hit), "file": str(hit.relative_to(docs_dir)) if hit else ""})
     ready = all(r["status"] == "ready" for r in rows) and all(e["present"] for e in enclosures) and bool(rows)
     return {"rows": rows, "enclosures": enclosures, "docs_dir": str(docs_dir) if docs_dir else "",
