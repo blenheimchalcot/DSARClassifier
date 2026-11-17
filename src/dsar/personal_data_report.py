@@ -140,7 +140,7 @@ def redaction_pieces(folders: dict[str, Path], conn=None) -> tuple[list[dict], l
         skip = _stack_skip(conn, path)
         docs = [d for d in markup.Folder(path, "", None).docs() if d["name"] not in skip]
         for d in docs:
-            left = len(d["elements"]) - len(d["decisions"])
+            left = markup.undecided_count(d)
             if left:
                 undecided.append({"file": str(path / d["name"]), "why": f"{left} element(s) undecided in the Personal Data Reviewer"})
         for item in markup.extracts(docs):

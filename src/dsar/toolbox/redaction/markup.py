@@ -243,6 +243,8 @@ class Folder:
             doc = self.resolve(text, events)
             for el in doc["elements"]:
                 el["score"] = scores.get((p.name, sha, json.dumps(el["parts"])))
+                el["blank"] = is_blank(text, el)
+                el["below"] = below_threshold(el)
             out.append({"name": p.name, "sha256": sha, "text": text, **doc, "stale": other})
         return out
 
@@ -337,8 +339,7 @@ class Folder:
         """Write the report text and the private extract register for the whole folder."""
         docs = self.docs()
         items = extracts(docs)
-        undecided = {d["name"]: len(d["elements"]) - len(d["decisions"]) for d in docs
-                     if len(d["decisions"]) < len(d["elements"])}
+        undecided = {d["name"]: n for d in docs if (n := undecided_count(d))}
         out_dir = self.folder / EXTRACT_DIR
         out_dir.mkdir(exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ("_DRAFT" if undecided else "")
@@ -384,6 +385,26 @@ def screen_text(text: str) -> str:
 
 def screen_docs(docs: list[dict]) -> list[dict]:
     return [{**d, "text": screen_text(d["text"])} for d in docs]
+
+
+def is_blank(text: str, el: dict) -> bool:
+    """No letters or digits (a '---' rule, a lone bullet): nothing to decide, nothing to extract."""
+    return not re.search(r"\w", "".join(text[a:b] for a, b in el["parts"]))
+
+
+REVIEW_MIN_SCORE = 7          # operator instruction 2026-11-17: only elements the model scores 7+ are reviewed
+
+
+def below_threshold(el: dict) -> bool:
+    """Scored by the model, below the review threshold: needs no decision and stays out of the report.
+    An element not yet scored (or the model gave no number) still needs a decision."""
+    s = el.get("score") or {}
+    return s.get("score") is not None and s["score"] < REVIEW_MIN_SCORE
+
+
+def undecided_count(doc: dict) -> int:
+    return sum(1 for el in doc["elements"]
+               if el["id"] not in doc["decisions"] and not el.get("blank") and not el.get("below"))
 
 
 REPEAT_MIN_CHARS = 20          # below this, a repeat must be exactly the same text (not just the same words)
@@ -452,7 +473,7 @@ def repeats_for(docs: list[dict], sources: dict[str, dict]) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for d in docs:
         for el in d["elements"]:
-            if el["id"] in d["decisions"]:
+            if el["id"] in d["decisions"] or el.get("below"):
                 continue
             raw = _element_raw(d["text"], el)
             key = _norm(raw)
@@ -720,7 +741,7 @@ main{padding:0 32px 64px;max-width:940px;width:100%}
 .why{font-size:11px;font-weight:600;color:var(--red);text-decoration:none;margin:0 4px;white-space:nowrap}
 .mark{background:var(--redbg);color:var(--red);text-decoration:line-through;cursor:pointer;border-radius:2px;outline:1px dashed var(--red)}
 .blk{background:#000;color:#fff;font-size:12px;padding:1px 6px;border-radius:2px;white-space:nowrap}
-.form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;font-size:13px}.form.top{justify-content:flex-end;margin:8px 0 10px}.form.col{flex-direction:column;align-items:flex-end}.form .frow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end}.btn kbd{font:600 10px/1 var(--mono,monospace);border:1px solid currentColor;border-radius:3px;padding:1px 4px;margin-left:4px;opacity:.6}
+.itemscore{background:var(--bg);border-left:3px solid var(--part,#c80);border-radius:6px;padding:8px 12px;margin:0 0 10px;font-size:14px}.itemscore .ev{font-size:12px;opacity:.75;margin-top:4px}.form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;font-size:13px}.form.top{justify-content:flex-end;margin:8px 0 10px}.form.col{flex-direction:column;align-items:flex-end}.form .frow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end}.btn kbd{font:600 10px/1 var(--mono,monospace);border:1px solid currentColor;border-radius:3px;padding:1px 4px;margin-left:4px;opacity:.6}
 .form select,.form input{padding:4px 6px;font:inherit;font-size:13px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px}.form input{flex:1;min-width:140px}
 mark{background:#ffe066;color:#000}
 .prior{font-size:13px;background:var(--partbg);color:var(--part);border-radius:6px;padding:4px 10px;margin-top:6px}
@@ -748,13 +769,13 @@ details.more .menu button{display:block;width:100%;text-align:left;border:0;back
 const TOKEN=new URLSearchParams(location.search).get("token")||(document.querySelector('meta[name="csrf"]')||{}).content,REASONS=__REASONS__,SUBJECT=(new URLSearchParams(location.search).get("subject")||"").toLowerCase();
 const COLOURS=["#2f5d8a","#2e7d4f","#8a4b9c","#b5651d","#1f7a8c"];
 const LABEL={release:"Extracted",redact_full:"Left out",redact_partial:"Extracted in part",pending:"Not reviewed"};
-let DOCS=[],cur=0,view="original",q="",edit=null,full=null,split=null,minScore=-1,focus=null,lastReason=REASONS[0],doneOpen=false,openRow=null,REP={},repOpen=false;
+let DOCS=[],cur=0,view="original",q="",edit=null,full=null,split=null,minScore=-1,focus=null,lastReason=REASONS[0],doneOpen=false,openRow=null,REP={},repOpen=false,lowOpen=false;
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const reasonOpts=()=>REASONS.map(x=>`<option>${esc(x)}</option>`).join("");
 function toast(m){const t=document.getElementById("toast");t.textContent=m;t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",3000)}
-async function load(keep){const j=await (await fetch("api/docs?token="+TOKEN)).json();DOCS=j.docs;REP=j.repeats||{};document.getElementById("who").innerHTML="Reviewer: <b>"+esc(j.reviewer)+"</b>"+(j.chain_ok?"":" · <span style='color:var(--red)'>event log chain broken</span>");if(!keep){cur=0;const P=new URLSearchParams(location.search),F=P.get("file"),E=P.get("el");if(F){const i=DOCS.findIndex(d=>d.name===F);if(i>=0){cur=i;if(E){openRow=E;focus=E}}}}nav();render();if(!keep&&openRow)setTimeout(()=>goTo(openRow),60);if(!focus){const d=DOCS[cur];focus=(d.elements.find(e=>!d.decisions[e.id]&&!(REP[d.name]||{})[e.id])||{}).id;render()}}
+async function load(keep){const j=await (await fetch("api/docs?token="+TOKEN)).json();DOCS=j.docs;REP=j.repeats||{};document.getElementById("who").innerHTML="Reviewer: <b>"+esc(j.reviewer)+"</b>"+(j.chain_ok?"":" · <span style='color:var(--red)'>event log chain broken</span>");if(!keep){cur=0;const P=new URLSearchParams(location.search),F=P.get("file"),E=P.get("el");if(F){const i=DOCS.findIndex(d=>d.name===F);if(i>=0){cur=i;if(E){openRow=E;focus=E}}}}nav();render();if(!keep&&openRow)setTimeout(()=>goTo(openRow),60);if(!focus){const d=DOCS[cur];focus=(d.elements.find(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[d.name]||{})[e.id])||{}).id;render()}}
 async function act(body){Object.assign(body,{file:DOCS[cur].name,sha256:DOCS[cur].sha256});const r=await fetch("api/act",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify(body)});const j=await r.json();if(!r.ok){toast(j.error);return false}return true}
-function nav(){const f=document.getElementById("files");f.innerHTML="";DOCS.forEach((d,i)=>{const n=Object.keys(d.decisions).length,nr=Object.keys(REP[d.name]||{}).length,b=document.createElement("button");b.className=i===cur?"on":"";b.innerHTML=esc(d.name.replace(/\.txt$/,"").replace(/_/g," "))+`<span class="prog">${n}/${d.elements.length} reviewed · ${d.redactions.length} passage(s) left out${nr?` · ${nr} repeat(s)`:""}</span>`;b.onclick=()=>{if(edit&&!confirm("Discard unsaved marks?"))return;cur=i;q="";edit=null;full=null;split=null;focus=(d.elements.find(e=>!d.decisions[e.id]&&!(REP[d.name]||{})[e.id])||{}).id;nav();render();scrollTo(0,0)};f.appendChild(b)})}
+function nav(){const f=document.getElementById("files");f.innerHTML="";DOCS.forEach((d,i)=>{const n=Object.keys(d.decisions).length,nr=Object.keys(REP[d.name]||{}).length,tot=d.elements.filter(e=>(!e.blank&&!e.below)||d.decisions[e.id]).length,b=document.createElement("button");b.className=i===cur?"on":"";b.innerHTML=esc(d.name.replace(/\.txt$/,"").replace(/_/g," "))+`<span class="prog">${d.item&&d.item.score!=null?`score ${d.item.score} · `:""}${n}/${tot} reviewed · ${d.redactions.length} passage(s) left out${nr?` · ${nr} repeat(s)`:""}</span>`;b.onclick=()=>{if(edit&&!confirm("Discard unsaved marks?"))return;cur=i;q="";edit=null;full=null;split=null;focus=(d.elements.find(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[d.name]||{})[e.id])||{}).id;nav();render();scrollTo(0,0)};f.appendChild(b)})}
 function hl(s){let e=esc(s);if(q){const re=new RegExp("("+q.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+")","gi");e=e.replace(re,"<mark>$1</mark>")}return e}
 // One part [a,b] of an element, with redactions rs; cls is the class for released text
 function piece(d,a,b,rs,cls,editable){let out="",pos=a;const seg0=(x,y)=>`<span data-s="${x}" class="${cls}">${hl(d.text.slice(x,y))}</span>`;
@@ -771,13 +792,14 @@ function row(d,el){const dec=d.decisions[el.id],st=dec.decision,text=el.parts.ma
 function buttons(st){return `<button class="btn big ${st==="release"?"go":""}" data-a="approve" title="A">${st==="release"?"✓ ":""}Extract <kbd>E</kbd></button><button class="btn big ${st==="redact_full"?"stop":""}" data-a="full" title="R">${st==="redact_full"?"✓ ":""}Leave out <kbd>L</kbd></button><button class="btn big ${st==="redact_partial"?"primary":""}" data-a="partial" title="P">${st==="redact_partial"?"✓ Edit parts <kbd>P</kbd>":"Leave part out <kbd>P</kbd>"}</button>`}
 function more(el,decided){return `<details class="more"><summary title="More">⋯</summary><div class="menu"><button data-a="split">Split…</button>${el.split?'<button data-a="unsplit">Undo split</button>':""}${decided?'<button data-a="change">Clear decision</button>':""}</div></details>`}
 function render(){const d=DOCS[cur],m=document.getElementById("main");if(!d){m.innerHTML="<p>No .txt files in this folder.</p>";return}
- const who=[...new Set(d.elements.map(e=>e.who).filter(Boolean))],n=Object.keys(d.decisions).length;
+ const who=[...new Set(d.elements.map(e=>e.who).filter(Boolean))],n=Object.keys(d.decisions).length,total=d.elements.filter(e=>(!e.blank&&!e.below)||d.decisions[e.id]).length;
  let h=`<div class="bar"><input type="search" id="q" placeholder="Search…" value="${esc(q)}"><span class="toggle"><button data-v="original" class="${view==="original"?"on":""}">Original</button><button data-v="redacted" class="${view==="redacted"?"on":""}">As extracted</button></span>
   <select id="min" class="btn" title="Show only elements the model scored at or above this"><option value="-1">All scores</option>${[1,5,6,7,8].map(n=>`<option value="${n}" ${minScore===n?"selected":""}>Model score ≥ ${n}</option>`).join("")}</select><button class="btn" id="all">Extract all not yet reviewed</button><button class="btn primary" id="exp">Export redacted copy</button></div>
-  <div class="legend"><span><i class="sw" style="background:var(--okbg);border:1px solid var(--ok)"></i>Extracted</span><span><i class="sw" style="background:var(--redbg);border:1px solid var(--red)"></i>Left out</span><span>${n} of ${d.elements.length} elements reviewed</span><span class="keys"><kbd>E</kbd> extract · <kbd>L</kbd> leave out · <kbd>P</kbd> leave part out · <kbd>↓</kbd><kbd>↑</kbd> move · <kbd>Enter</kbd> confirm</span></div>`;
+  <div class="legend"><span><i class="sw" style="background:var(--okbg);border:1px solid var(--ok)"></i>Extracted</span><span><i class="sw" style="background:var(--redbg);border:1px solid var(--red)"></i>Left out</span><span>${n} of ${total} elements reviewed</span><span class="keys"><kbd>E</kbd> extract · <kbd>L</kbd> leave out · <kbd>P</kbd> leave part out · <kbd>↓</kbd><kbd>↑</kbd> move · <kbd>Enter</kbd> confirm</span></div>`;
+ if(d.item)h+=`<div class="itemscore">Classified as a whole item: <b>model score ${d.item.score??"–"}</b>${d.item.reason?" · "+esc(d.item.reason):""}${d.item.evidence?`<div class="ev">Evidence: “${esc(d.item.evidence)}”</div>`:""}</div>`;
  if(d.stale)h+=`<div class="warn">${d.stale} earlier decision(s) were made on a different version of this file and are not shown.</div>`;
  const cards={},shown=[];
- for(const el of d.elements){const text=el.parts.map(([a,b])=>d.text.slice(a,b)).join(" ");
+ for(const el of d.elements){if(el.blank&&!d.decisions[el.id])continue;const text=el.parts.map(([a,b])=>d.text.slice(a,b)).join(" ");
   if(q&&!text.toLowerCase().includes(q.toLowerCase())&&!(el.who||"").toLowerCase().includes(q.toLowerCase())&&edit?.el!==el.id)continue;
   if(minScore>=0&&!(el.score&&el.score.score>=minScore)&&edit?.el!==el.id&&split?.el!==el.id)continue;
   shown.push(el);
@@ -802,7 +824,7 @@ function render(){const d=DOCS[cur],m=document.getElementById("main");if(!d){m.i
   cards[el.id]=`<div class="el ${st} ${subj?"subj":""} ${editing?"editing":""} ${splitting?"editing splitting":""} ${focus===el.id?"focus":""}" data-el="${el.id}" style="--c:${c}"><div class="h">${name}${chip}${ctl}</div>${top}${prior?`<div class="prior">Decided before this element was split: ${prior}. Please decide again.</div>`:""}<div class="txt">${body}</div>${form}</div>`}
  // Processed elements collapse into one bar at the top; the rest follow in document order.
  const active=id=>edit?.el===id||full===id||split?.el===id||openRow===id;
- const R=REP[d.name]||{},done=shown.filter(el=>d.decisions[el.id]),todo=shown.filter(el=>!d.decisions[el.id]&&!R[el.id]),reps=shown.filter(el=>!d.decisions[el.id]&&R[el.id]);
+ const R=REP[d.name]||{},done=shown.filter(el=>d.decisions[el.id]),todo=shown.filter(el=>!d.decisions[el.id]&&!R[el.id]&&!el.below),reps=shown.filter(el=>!d.decisions[el.id]&&R[el.id]),low=shown.filter(el=>!d.decisions[el.id]&&el.below);
  if(done.length){const cnt={};done.forEach(el=>{const k=d.decisions[el.id].decision;cnt[k]=(cnt[k]||0)+1});
   h+=`<div class="done"><button class="dbar" id="dtoggle">${doneOpen?"▾":"▸"} Processed: ${done.length}<span class="t">${Object.entries(cnt).map(([k,v])=>v+" "+LABEL[k].toLowerCase()).join(" · ")}</span><span class="sp"></span><span class="t">${doneOpen?"Hide":"Show to review or change"}</span></button>`;
   h+=doneOpen?done.map(el=>active(el.id)?cards[el.id]:row(d,el)).join(""):done.filter(el=>active(el.id)).map(el=>cards[el.id]).join("");
@@ -810,18 +832,21 @@ function render(){const d=DOCS[cur],m=document.getElementById("main");if(!d){m.i
  if(reps.length){h+=`<div class="done rep"><div class="dbar"><button class="btn primary" id="applyrep">Apply the same decisions to ${reps.length} repeat(s)</button><span class="t">Same text as elements you have already decided</span><span class="sp"></span><button class="btn" id="rtoggle">${repOpen?"Hide":"Show them"}</button></div>`;
   h+=repOpen?reps.map(el=>active(el.id)?cards[el.id]:`<div class="row" data-row="${el.id}"><span class="badge pending">Repeat</span><span class="t">${R[el.id].kind==="duplicate"?"Duplicate of "+esc(R[el.id].from):esc(R[el.id].from)+": "+LABEL[R[el.id].decision]+(R[el.id].reason?" ("+esc(R[el.id].reason)+")":"")}</span> ${esc(el.parts.map(([a,b])=>d.text.slice(a,b)).join(" ").replace(/\s+/g," ").slice(0,140))}</div>`).join(""):reps.filter(el=>active(el.id)).map(el=>cards[el.id]).join("");
   h+=`</div>`}
+ if(low.length){h+=`<div class="done low"><button class="dbar" id="ltoggle">${lowOpen?"▾":"▸"} Below 7: ${low.length}<span class="t">the model scored these under 7, so they are not reviewed and stay out of the report</span><span class="sp"></span><span class="t">${lowOpen?"Hide":"Show"}</span></button>`;
+  h+=lowOpen?low.map(el=>cards[el.id]).join(""):low.filter(el=>active(el.id)).map(el=>cards[el.id]).join("");h+=`</div>`}
  h+=todo.length?todo.map(el=>cards[el.id]).join(""):reps.length?`<p class="alldone">Only repeats are left: apply the same decisions above, or open one to decide it differently.</p>`:`<p class="alldone">Every element ${q||minScore>=0?"shown here ":""}is reviewed. Open “Processed” to check them, or export the redacted copy.</p>`;
  m.innerHTML=h;
  if(edit){const s=document.getElementById("er");if(s)s.value=edit.reason||REASONS[0]}
  const qi=document.getElementById("q");qi.oninput=()=>{q=qi.value;const p=qi.selectionStart;render();const n=document.getElementById("q");n.focus();n.setSelectionRange(p,p)};
  m.querySelectorAll(".toggle button").forEach(b=>b.onclick=()=>{view=b.dataset.v;render()});
  const dt=document.getElementById("dtoggle");if(dt)dt.onclick=()=>{doneOpen=!doneOpen;openRow=null;render()};
+ const lt=document.getElementById("ltoggle");if(lt)lt.onclick=()=>{lowOpen=!lowOpen;openRow=null;render()};
  const rt=document.getElementById("rtoggle");if(rt)rt.onclick=()=>{repOpen=!repOpen;openRow=null;render()};
  const ar=document.getElementById("applyrep");if(ar)ar.onclick=async()=>{ar.disabled=true;const r=await fetch("api/apply-repeats",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:"{}"});const j=await r.json();if(!r.ok){toast(j.error||"Not applied");ar.disabled=false;return}toast(`Applied ${j.applied} decision(s)${j.failed?`, ${j.failed} need deciding by hand`:""}`);await load(true);nav()};
  m.querySelectorAll(".row").forEach(r=>r.onclick=()=>{openRow=r.dataset.row;focus=openRow;render()});
  document.getElementById("min").onchange=ev=>{minScore=+ev.target.value;render()};
  document.getElementById("exp").onclick=()=>window.open("export?token="+TOKEN+"&file="+encodeURIComponent(d.name),"_blank");
- document.getElementById("all").onclick=async()=>{const todo=d.elements.filter(e=>!d.decisions[e.id]&&!(REP[d.name]||{})[e.id]);if(!todo.length||!confirm(`Extract ${todo.length} element(s) not yet reviewed, as they are?`))return;for(const e of todo)if(!await act({action:"decide",element:e.id,decision:"release"}))break;await load(true)};
+ document.getElementById("all").onclick=async()=>{const todo=d.elements.filter(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[d.name]||{})[e.id]);if(!todo.length||!confirm(`Extract ${todo.length} element(s) not yet reviewed, as they are?`))return;for(const e of todo)if(!await act({action:"decide",element:e.id,decision:"release"}))break;await load(true)};
  m.querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const id=b.closest(".el").dataset.el,a=b.dataset.a;
   if(a==="approve"){if(DOCS[cur].decisions[id]?.decision==="release")return advance(id);if(await act({action:"decide",element:id,decision:"release"})){await load(true);advance(id)}}
   else if(a==="full"){if(edit)return toast("Save or cancel the element you are marking first");focus=id;full=id;render()}

@@ -252,3 +252,18 @@ def test_emoji_are_one_character_on_screen():
     shown = markup.screen_text(text)
     assert len(shown) == len(text) and shown == "Hi □ there: Summary"
     assert len(shown.encode("utf-16-le")) // 2 == len(text)              # what the browser counts
+
+
+def test_only_elements_scored_7_or_more_need_a_decision(tmp_path):
+    folder = tmp_path / "f"
+    folder.mkdir()
+    (folder / "01_a.txt").write_text("Sam Sample's grievance about the rota.\n\nKind regards, Pat\n\nNot scored yet.\n")
+    f = markup.Folder(folder, "R", None)
+    doc = f.docs()[0]
+    with (folder / markup.SCORES_NAME).open("w") as fh:
+        for el, score in zip(doc["elements"], (8, 2)):
+            fh.write(json.dumps({"file": doc["name"], "sha256": doc["sha256"], "span": el["parts"], "score": score}) + "\n")
+    doc = f.docs()[0]
+    assert [el["below"] for el in doc["elements"]] == [False, True, False]
+    assert markup.undecided_count(doc) == 2                    # the 8 and the unscored one; the 2 needs nothing
+    assert markup.extracts([doc]) == []                         # and nothing below 7 goes in by itself

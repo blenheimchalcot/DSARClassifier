@@ -142,8 +142,38 @@ def _repeats(f: markup.Folder, docs: list[dict]) -> dict:
 def docs(fid):
     f = _folder(fid)
     d = f.docs()
-    return jsonify({"reviewer": f.reviewer, "docs": markup.screen_docs(d), "chain_ok": f.events.verify(),
+    shown = markup.screen_docs(d)
+    for doc, item in zip(shown, _item_scores(f.folder, [x["name"] for x in d])):
+        if item:
+            doc["item"] = item
+    return jsonify({"reviewer": f.reviewer, "docs": shown, "chain_ok": f.events.verify(),
                     "repeats": _repeats(f, d)})
+
+
+def _item_scores(folder: Path, names: list[str]) -> list[dict | None]:
+    """For a review stack: each file's item as classified (model score, reason, evidence), from the case database."""
+    import sqlite3
+
+    from dsar import evidence, personal_data_report
+    idx = folder / personal_data_report.STACK_INDEX
+    db_path = folder.parent.parent / "dsar.sqlite"
+    if not idx.is_file() or not db_path.is_file():
+        return [None] * len(names)
+    index = json.loads(idx.read_text(encoding="utf-8"))
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        out = []
+        for name in names:
+            cid = (index.get(name) or {}).get("chunk_id")
+            row = conn.execute("SELECT cl.score, cl.description, cl.evidence, c.content, c.subject FROM chunks c "
+                               "LEFT JOIN classifications cl ON cl.chunk_id = c.chunk_id WHERE c.chunk_id = ?",
+                               (cid,)).fetchone() if cid else None
+            out.append({"chunk_id": cid, "score": row[0], "reason": row[1] or "",
+                        "evidence": row[2] or "", "evidence_check": evidence.verify(row[0], row[2], row[3], row[4])}
+                       if row else None)
+        return out
+    finally:
+        conn.close()
 
 
 @bp.route("/f/<fid>/api/apply-repeats", methods=["POST"])

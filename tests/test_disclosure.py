@@ -444,3 +444,20 @@ def test_each_extract_in_the_preview_links_back_to_its_decision(case, template):
     assert [p.name.endswith("_b.txt") for p in stack.glob("*.txt")] == [True]
     with db.connect(case / "dsar.sqlite") as conn:
         assert disclosure.latest(conn)["b"]["decision"] == disclosure.IN_REVIEWER
+
+
+def test_review_stack_files_show_their_classification_and_skip_blank_lines(case, template):
+    from dsar.toolbox.redaction import markup, web
+
+    with db.connect(case / "dsar.sqlite") as conn:
+        conn.execute("UPDATE chunks SET content = ? WHERE chunk_id = 'd'", ("Sam Sample raised a grievance.\n\n---\n\nThanks",))
+    app, c = client_for(webapp.Settings.for_case(case))
+    c.post("/report/stack", data={"csrf": c.csrf, "group": "all"})
+    stack = next((case / "output").glob(personal_data_report.STACK_PREFIX + "*"))
+    with app.test_request_context():
+        fid = next(k for k, p in web.folders().items() if p == stack)
+    j = c.get(f"/toolbox/redaction/f/{fid}/api/docs").get_json()
+    d = next(x for x in j["docs"] if x["name"].endswith("_d.txt"))
+    assert d["item"]["score"] == 8 and d["item"]["chunk_id"] == "d" and d["item"]["reason"] == "test"
+    blank = [el for el in d["elements"] if el["blank"]]
+    assert len(blank) == 1 and markup.undecided_count(d) == len(d["elements"]) - 1
