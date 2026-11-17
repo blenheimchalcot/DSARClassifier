@@ -3,6 +3,7 @@
 ## 0.3.1 (unreleased)
 
 ### Changed
+- Report preview: each source of each extract has **Edit in Personal Data Reviewer**, which opens that file with the element expanded and centred, ready to *Leave part out*. An extract chosen in Review instead has **Narrow in Personal Data Reviewer**, which sends that item as a one-item review stack. The Personal Data Reviewer links back to the Report preview.
 - **Fixed: a workbook 'Disclose' no longer puts the whole passage in the Personal Data Report.** It carried headers, quoted threads and other people's details, including text left out in the Personal Data Reviewer. Such items now wait until passages are chosen. Any extract containing text left out in the Personal Data Reviewer (other than as a duplicate or already reviewed) is held out of the report and listed as a conflict.
 - **Report page**: *Left to process*, grouped with titles, dates, scores and workbook notes, and a **Preview** laid out like the Word table. Outstanding items can be sent as a numbered **review stack** to the Personal Data Reviewer, to step through them there: each file is the item's exact text, and the report then takes them only from what is extracted.
 - Top bar: **Cases** first, then **Current case: <ref>**.

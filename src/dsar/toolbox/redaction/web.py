@@ -116,12 +116,14 @@ def page(fid):
         from dsar.webapp import cases
         subject = cases.family(s).subject_name
     if "subject" not in request.args and subject:
-        return redirect(url_for(".page", fid=fid, subject=subject.split()[0]))
+        return redirect(url_for(".page", fid=fid, subject=subject.split()[0],
+                                **{k: v for k, v in request.args.items() if k in ("file", "el")}))
     from flask import session
     head = f'<head><meta name="csrf" content="{html.escape(session.get("csrf", ""))}">'
     bar = (f'<body><div style="padding:6px 16px;font:13px -apple-system,sans-serif;border-bottom:1px solid #8884">'
            f'<a href="{url_for("main.home")}">{html.escape(s.case_ref or "DSAR")}</a> · '
            f'<a href="{url_for(".index")}">Personal Data Reviewer</a> · {html.escape(str(f.folder.name))}'
+           f'{(" · <a href=" + chr(34) + url_for("review.report_page") + "#preview" + chr(34) + ">← Report preview</a>") if s.case_bound else ""}'
            f'{" · <b>free-standing: not audit-logged</b>" if not s.case_bound else ""}</div>')
     return markup.APP_PAGE.replace("__REASONS__", json.dumps(markup.REASONS)).replace("<head>", head, 1).replace(
         "<body>", bar, 1)

@@ -113,8 +113,18 @@ def report_page():
             if cid in items:
                 items[cid]["notes"] = dec.get("notes", "")
     pv = personal_data_report.preview(template, fam.subject_name, data["extracts"]) if template.is_file() else None
+    from dsar.toolbox.redaction import web as redaction_web
+    fids = {str(p): fid for fid, p in folders.items()}
+
+    def edit_url(src: dict) -> str:
+        """Where to change the decision behind one source of an extract."""
+        if src.get("origin") == "redaction":
+            path = Path(src["source_path"])
+            fid = fids.get(str(path.parent)) or redaction_web._fid(path.parent)
+            return url_for("tool_redaction.page", fid=fid, file=path.name, el=src.get("item_ref", ""))
+        return ""
     return render_template("report.html", data=data, template=template, template_ok=template.is_file(), fam=fam,
-                           todo=_left_to_process(data, items, folders, pv), pv=pv,
+                           todo=_left_to_process(data, items, folders, pv), pv=pv, edit_url=edit_url,
                            builds=personal_data_report.builds(fam.main_dir / "output"), error=request.args.get("error", ""))
 
 
@@ -216,11 +226,16 @@ def report_stack():
     fam = cases.family(s)
     wanted = request.form.get("group", "")
     with _conn() as conn:
-        data = personal_data_report.assemble(conn, _redaction_folders())
-        items = {r["chunk_id"]: r for r in disclosure.queue(conn, min_score=0, status="")["rows"]}
-        groups = [g for g in _left_to_process(data, items, _redaction_folders(), None)
-                  if g["kind"] == "items" and (wanted == "all" or g["title"] == wanted)]
-        ids = [r["chunk_id"] for g in groups for r in g["rows"]]
+        if request.form.get("chunk_id"):
+            # One item, e.g. an extract chosen in Review that needs narrowing further.
+            groups = [{"title": "single item"}]
+            ids = [request.form["chunk_id"]] if disclosure.latest_for(conn, request.form["chunk_id"]) else []
+        else:
+            data = personal_data_report.assemble(conn, _redaction_folders())
+            items = {r["chunk_id"]: r for r in disclosure.queue(conn, min_score=0, status="")["rows"]}
+            groups = [g for g in _left_to_process(data, items, _redaction_folders(), None)
+                      if g["kind"] == "items" and (wanted == "all" or g["title"] == wanted)]
+            ids = [r["chunk_id"] for g in groups for r in g["rows"]]
         if not ids:
             return redirect(url_for("review.report_page", error="Nothing to send to the Personal Data Reviewer."))
         try:

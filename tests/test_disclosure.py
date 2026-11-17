@@ -414,3 +414,33 @@ def test_an_extract_containing_text_left_out_in_the_reviewer_is_held_out(case, t
     page = c.get("/report/").get_data(as_text=True)
     assert "Held out: conflicts with what you left out" in page
     assert "No extract contains text left out" in c.get("/").get_data(as_text=True)
+
+
+def test_each_extract_in_the_preview_links_back_to_its_decision(case, template):
+    """Preview: an extract from the Personal Data Reviewer opens its element there; one from Review can be stacked."""
+    from dsar.toolbox.redaction import markup
+
+    folder = case / "output" / "deep_dive"
+    folder.mkdir()
+    (folder / "01_2026-02-10_note.txt").write_text("Sam Sample starts on Monday.\n")
+    f = markup.Folder(folder, "R", None)
+    doc = f.docs()[0]
+    el = doc["elements"][0]["id"]
+    f.act({"file": doc["name"], "sha256": doc["sha256"], "action": "decide", "element": el, "decision": "release"})
+    with db.connect(case / "dsar.sqlite") as conn:
+        disclosure.record(conn, "b", {"decision": disclosure.EXTRACT, "content_sha256": disclosure.content_sha256(TEXT_B),
+                                      "spans": [{"kind": "extract", "start": 0, "end": len(TEXT_B)}]}, "R")
+    app, c = client_for(webapp.Settings.for_case(case))
+    page = c.get("/report/").get_data(as_text=True)
+    link = re.search(r'href="(/toolbox/redaction/f/[^"]+)">Edit in Personal Data Reviewer', page).group(1).replace("&amp;", "&")
+    assert f"file=01_2026-02-10_note.txt" in link and f"el={el}" in link
+    r = c.get(link)                                          # the subject redirect keeps file and element
+    assert r.status_code == 302 and "file=01_2026-02-10_note.txt" in r.headers["Location"] and f"el={el}" in r.headers["Location"]
+    assert "Report preview" in c.get(r.headers["Location"]).get_data(as_text=True)
+    assert "Narrow in Personal Data Reviewer" in page
+    r = c.post("/report/stack", data={"csrf": c.csrf, "chunk_id": "b"})
+    assert "/toolbox/redaction/f/" in r.headers["Location"]
+    stack = next((case / "output").glob(personal_data_report.STACK_PREFIX + "*"))
+    assert [p.name.endswith("_b.txt") for p in stack.glob("*.txt")] == [True]
+    with db.connect(case / "dsar.sqlite") as conn:
+        assert disclosure.latest(conn)["b"]["decision"] == disclosure.IN_REVIEWER

@@ -69,3 +69,4 @@ td.pre{white-space:pre-wrap}
 details.todo summary{cursor:pointer;list-style:none}details.todo summary::-webkit-details-marker{display:none}
 details.todo summary::before{content:"▸ ";color:var(--muted)}details.todo[open] summary::before{content:"▾ "}
 .stackall{margin:0 0 10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.doctable .srcrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:2px 0}.doctable .srcrow .btn{font-size:11px;padding:1px 7px}
