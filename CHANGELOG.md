@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 (unreleased)
+## 0.3.0 (2026-11-17)
 
 ### Upgrading from an earlier pull of main
 - `git pull`, then `pip install -r requirements.lock && pip install -e . --no-deps` and `python -m pytest -q`. No new packages since the web app (#19).
