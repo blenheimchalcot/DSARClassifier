@@ -612,7 +612,7 @@ main{padding:0 32px 64px;max-width:940px;width:100%}
 .why{font-size:11px;font-weight:600;color:var(--red);text-decoration:none;margin:0 4px;white-space:nowrap}
 .mark{background:var(--redbg);color:var(--red);text-decoration:line-through;cursor:pointer;border-radius:2px;outline:1px dashed var(--red)}
 .blk{background:#000;color:#fff;font-size:12px;padding:1px 6px;border-radius:2px;white-space:nowrap}
-.form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;font-size:13px}
+.form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;font-size:13px}.form.top{justify-content:flex-end;margin:8px 0 10px}
 .form select,.form input{padding:4px 6px;font:inherit;font-size:13px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px}.form input{flex:1;min-width:140px}
 mark{background:#ffe066;color:#000}
 .prior{font-size:13px;background:var(--partbg);color:var(--part);border-radius:6px;padding:4px 10px;margin-top:6px}
@@ -684,14 +684,14 @@ function render(){const d=DOCS[cur],m=document.getElementById("main");if(!d){m.i
   else{body=el.parts.map(([a,b])=>piece(d,a,b,[],"",false)).join(" ");
    ctl=`<span class="badge pending">Not reviewed</span><span class="sp"></span>${buttons(st)}${more(el,false)}`}
   const prior=(d.earlier[el.id]||[]).map(p=>`${LABEL[p.decision]}${p.reasons.length?" ("+esc(p.reasons.join(", "))+")":""}, ${esc(p.reviewer)} ${esc(p.ts.slice(0,16).replace("T"," "))}`).join("; ");
-  let form="";
-  if(editing)form=`<div class="form">Select text above to mark it. Reason for new marks: <select id="er">${reasonOpts()}</select><input id="en" placeholder="Note (required for Other)" value="${esc(edit.note||"")}"></div>`;
+  let form="",top="";
+  if(editing)top=`<div class="form top">Select text below to mark it. Reason for new marks: <select id="er">${reasonOpts()}</select><input id="en" placeholder="Note (required for Other)" value="${esc(edit.note||"")}"></div>`;
   if(splitting){const opts=[...who,"Unknown speaker"].map(w=>`<option ${w===split.who?"selected":""}>${esc(w)}</option>`).join("");
    form=`<div class="form">${split.at==null?"Click in the text where the new part should start.":"New part starts at the blue line. Speaker of the new part:"} <select id="sw">${opts}</select><button class="btn primary" data-a="splitok" ${split.at==null?"disabled":""}>Split here</button><button class="btn" data-a="splitcancel">Cancel</button></div>`}
-  if(full===el.id)form=`<div class="form">Leave all of this element out. Reason: <select id="fr">${REASONS.map(x=>`<option ${x===lastReason?"selected":""}>${esc(x)}</option>`).join("")}</select><input id="fn" placeholder="Note (required for Other)"><button class="btn stop" data-a="fullok">Leave out (Enter)</button><button class="btn" data-a="fullcancel">Cancel (Esc)</button></div>`;
+  if(full===el.id)top=`<div class="form top">Leave all of this element out. Reason: <select id="fr">${REASONS.map(x=>`<option ${x===lastReason?"selected":""}>${esc(x)}</option>`).join("")}</select><input id="fn" placeholder="Note (required for Other)"><button class="btn stop" data-a="fullok">Leave out (Enter)</button><button class="btn" data-a="fullcancel">Cancel (Esc)</button></div>`;
   const s=el.score,chip=s?(s.score==null?`<span class="sc lo" title="${esc(s.special||s.description||"")}">Model: –</span>`:`<span class="sc ${s.score>=7?"hi":s.score>=5?"mid":"lo"}" title="Model suggestion, not a decision: ${esc(s.description||"")}${s.evidence?" | "+esc(s.evidence):""}">Model ${s.score}</span>`):"";
   const name=el.who?`<b>${esc(el.who)}${el.split?" <span class='t'>(split by reviewer)</span>":""}</b><span class="t">${esc(el.t||"")}</span>`:`<b style="color:var(--muted)">${esc(el.label)}</b>`;
-  cards[el.id]=`<div class="el ${st} ${subj?"subj":""} ${editing?"editing":""} ${splitting?"editing splitting":""} ${focus===el.id?"focus":""}" data-el="${el.id}" style="--c:${c}"><div class="h">${name}${chip}${ctl}</div>${prior?`<div class="prior">Decided before this element was split: ${prior}. Please decide again.</div>`:""}<div class="txt">${body}</div>${form}</div>`}
+  cards[el.id]=`<div class="el ${st} ${subj?"subj":""} ${editing?"editing":""} ${splitting?"editing splitting":""} ${focus===el.id?"focus":""}" data-el="${el.id}" style="--c:${c}"><div class="h">${name}${chip}${ctl}</div>${top}${prior?`<div class="prior">Decided before this element was split: ${prior}. Please decide again.</div>`:""}<div class="txt">${body}</div>${form}</div>`}
  // Processed elements collapse into one bar at the top; the rest follow in document order.
  const active=id=>edit?.el===id||full===id||split?.el===id||openRow===id;
  const done=shown.filter(el=>d.decisions[el.id]),todo=shown.filter(el=>!d.decisions[el.id]);

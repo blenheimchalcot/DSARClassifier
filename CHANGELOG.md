@@ -3,6 +3,7 @@
 ## 0.3.1 (unreleased)
 
 ### Changed
+- Personal Data Reviewer: the reason boxes for **Leave out** and **Leave part out** open directly under the buttons, right-aligned (*Leave out (Enter)* sits just below *Leave out*), instead of after the element's text.
 - **Fixed: an element extracted in part is one extract**, with its lines kept and the parts left out removed. Before, each stretch of text between cuts became its own extract, with its lines run together. A cut that spans a line break keeps the break; lines left empty are dropped. Text is never tidied beyond the cuts.
 - Report preview: each source of each extract has **Edit in Personal Data Reviewer**, which opens that file with the element expanded and centred, ready to *Leave part out*. An extract chosen in Review instead has **Narrow in Personal Data Reviewer**, which sends that item as a one-item review stack. The Personal Data Reviewer links back to the Report preview.
 - **Fixed: a workbook 'Disclose' no longer puts the whole passage in the Personal Data Report.** It carried headers, quoted threads and other people's details, including text left out in the Personal Data Reviewer. Such items now wait until passages are chosen. Any extract containing text left out in the Personal Data Reviewer (other than as a duplicate or already reviewed) is held out of the report and listed as a conflict.
