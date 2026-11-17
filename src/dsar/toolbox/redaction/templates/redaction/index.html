@@ -6,17 +6,21 @@
 {% if error %}<div class="err">{{ error }}</div>{% endif %}
 <table class="t">
   <tr><th>Folder</th><th>Files</th><th>To review (7+)</th><th>6 and below</th><th>Repeats</th><th>Reviewed</th></tr>
-  {% if total and rows | length > 1 %}
-  <tr style="background:var(--bg)"><td><b>All folders</b><div class="muted small">the sections open across every folder below</div></td><td>{{ rows | sum(attribute="files") }}</td>
+  {% if total and rows | rejectattr("left_out") | list | length > 1 %}
+  <tr style="background:var(--bg)"><td><b>All folders</b><div class="muted small">the sections open across every folder below</div></td><td>{{ rows | rejectattr("left_out") | sum(attribute="files") }}</td>
     {% for k in ("review", "low", "repeats", "done") %}
-    <td>{% if total[k] %}<a class="btn sm{{ ' primary' if k in ('review', 'repeats') }}" href="{{ url_for('.page', fid=rows[-1].id, section=k) }}">{{ total[k] }}</a>{% else %}<span class="muted">0</span>{% endif %}</td>
+    <td>{% if total[k] %}<a class="btn sm{{ ' primary' if k in ('review', 'repeats') }}" href="{{ url_for('.page', fid=(rows | rejectattr("left_out") | list)[-1].id, section=k) }}">{{ total[k] }}</a>{% else %}<span class="muted">0</span>{% endif %}</td>
     {% endfor %}</tr>
   {% endif %}
   {% for r in rows %}
+  {% if r.left_out %}
+  <tr class="muted"><td class="mono">{{ r.label }}<div class="small" style="font-family:inherit">Left out of the report (Report page), so not part of the review</div></td><td>{{ r.files }}</td><td colspan="4" class="small">–</td></tr>
+  {% else %}
   <tr><td class="mono"><a href="{{ url_for('.page', fid=r.id) }}">{{ r.label }}</a></td><td>{{ r.files }}</td>
     {% for k in ("review", "low", "repeats", "done") %}
     <td>{% if r.sections[k] %}<a class="btn sm{{ ' primary' if k in ('review', 'repeats') }}" href="{{ url_for('.page', fid=r.id, section=k) }}">{{ r.sections[k] }}</a>{% else %}<span class="muted">0</span>{% endif %}</td>
     {% endfor %}</tr>
+  {% endif %}
   {% else %}
   <tr><td colspan="6" class="muted">{% if settings.case_bound %}No folder under the case output/ holds .txt files yet. Copy the documents to review into, for example, <code>output/deep_dive_&lt;date&gt;/</code>.{% else %}No folders yet. Add one below, or start with <code>--markup-folder</code>.{% endif %}</td></tr>
   {% endfor %}

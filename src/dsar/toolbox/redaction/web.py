@@ -82,14 +82,16 @@ def _folder(fid: str) -> markup.Folder:
 def index():
     s = current_app.config["DSAR"]
     rows = []
+    skip = _left_out()
     loaded = {fid: (path, markup.Folder(path, "", None).docs()) for fid, path in folders().items()}
-    sources = markup.repeat_sources(list(loaded.values()))
+    sources = markup.repeat_sources([v for v in loaded.values() if str(v[0]) not in skip])
     for fid, (path, docs) in loaded.items():
         f = markup.Folder(path, "", None)
-        rows.append({"id": fid, "label": _label(path), "files": len(docs),
+        rows.append({"id": fid, "label": _label(path), "files": len(docs), "left_out": str(path) in skip,
                      "events": sum(1 for _ in f.events.lines()) if f.events.path.exists() else 0,
                      "sections": markup.section_counts(docs, markup.repeats_for(docs, sources))})
-    total = {k: sum(r["sections"][k] for r in rows) for k in ("review", "low", "repeats", "done")} if rows else None
+    live = [r for r in rows if not r["left_out"]]
+    total = {k: sum(r["sections"][k] for r in live) for k in ("review", "low", "repeats", "done")} if live else None
     return render_template("redaction/index.html", rows=rows, total=total, error=request.args.get("error", ""))
 
 
@@ -155,9 +157,33 @@ def docs(fid):
                     "repeats": _repeats(f, d)})
 
 
+def _left_out() -> set[str]:
+    """Folders left out of the Personal Data Report (Report page): not part of the review."""
+    s = current_app.config["DSAR"]
+    if not s.case_bound:
+        return set()
+    import sqlite3
+
+    from dsar import personal_data_report
+    from dsar.webapp import cases
+    db_path = cases.family(s).review_dir / "dsar.sqlite"
+    if not db_path.is_file():
+        return set()
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        return {k for k, v in personal_data_report.folder_choices(conn).items() if not v["included"]}
+    except sqlite3.OperationalError:                       # no choices table yet
+        return set()
+    finally:
+        conn.close()
+
+
 def _all_folders(f: markup.Folder) -> dict:
-    """Every Personal Data Reviewer folder of the request, so the page's sections cover them all."""
-    loaded = [(fid, path, markup.Folder(path, records.reviewer(), _owner(path)).docs()) for fid, path in folders().items()]
+    """Every Personal Data Reviewer folder of the request (except those left out of the report)."""
+    skip = _left_out()
+    loaded = [(fid, path, markup.Folder(path, records.reviewer(), _owner(path)).docs()) for fid, path in folders().items()
+              if str(path) not in skip or path == f.folder]
     sources = markup.repeat_sources([(path, docs) for _, path, docs in loaded])
     out = []
     for fid, path, docs in loaded:
