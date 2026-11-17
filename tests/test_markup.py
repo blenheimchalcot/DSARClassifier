@@ -178,3 +178,23 @@ def test_server_needs_token_and_stays_in_folder(folder: markup.Folder):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_an_element_extracted_in_part_is_one_extract_with_its_lines(tmp_path):
+    """Cutting names out of a block must not split the rest into separate extracts or run its lines together."""
+    folder = tmp_path / "f"
+    folder.mkdir()
+    text = ("Meeting Metadata\nTitle: Interview (Sam)\nHost: Pat Person\nParticipants: Sam Sample, Pat Person\n"
+            "Date: 21 Jul 2026\n")
+    (folder / "01_meeting.txt").write_text(text)
+    f = markup.Folder(folder, "R", None)
+    doc = f.docs()[0]
+    el = doc["elements"][0]
+    cut = lambda s: {"start": text.index(s), "end": text.index(s) + len(s), "reason": markup.REASONS[0]}
+    f.act({"file": doc["name"], "sha256": doc["sha256"], "action": "decide", "element": el["id"],
+           "decision": "redact_partial",
+           "redactions": [cut("Pat Person\n"), cut(", Pat Person"), cut("Date: 21 Jul 2026")]})
+    items = markup.extracts(f.docs())
+    assert len(items) == 1
+    assert items[0]["text"] == "Meeting Metadata\nTitle: Interview (Sam)\nHost:\nParticipants: Sam Sample"
+    # The cut "Pat Person\n" spanned a line break: the break stays, so "Host:" and "Participants" stay on separate lines.

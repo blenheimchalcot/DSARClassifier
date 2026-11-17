@@ -14,9 +14,9 @@ mark can never drift onto other text.
 element, with the case prompt and scale, into FOLDER/markup_scores.jsonl. The page
 shows it as a hint beside each element; it is never recorded as a decision.
 
-"Export Personal Data extracts" collects every released passage across the
-folder into plain report text: one extract per passage, identical extracts
-merged, no headings or sources. A private register beside it lists every
+"Export Personal Data extracts" collects every extracted element across the
+folder into plain report text: one extract per element (the parts left out
+removed, its lines kept), identical extracts merged, no headings or sources. A private register beside it lists every
 source of each extract, for the case record only.
 
 The export page is a true redaction: redacted text is removed before the page is
@@ -368,10 +368,23 @@ def _norm(text: str) -> str:
     return re.sub(r"\W+", " ", text).strip().lower()
 
 
-def extracts(docs: list[dict]) -> list[dict]:
-    """Released text of every decided element, one extract per released passage, identical ones merged.
+def extract_text(text: str, el: dict, redactions: list[dict]) -> str:
+    """An element's extracted text: its lines kept, the parts left out removed, lines left empty dropped."""
+    lines = []
+    for a, b in el["parts"]:
+        # A cut that spanned a line break keeps the break, so the lines around it stay apart.
+        kept = "".join(piece if r is None else ("\n" if "\n" in text[max(r["start"], a):min(r["end"], b)] else "")
+                       for piece, r in redacted_text(text, a, b, redactions))
+        lines += [" ".join(line.split()) for line in kept.split("\n")]
+    return "\n".join(line for line in lines if line)
 
-    Undecided elements are left out. Order is the order first seen (file, then element).
+
+def extracts(docs: list[dict]) -> list[dict]:
+    """One extract per decided element (its text without the parts left out), identical ones merged.
+
+    An element extracted in part stays one extract, so cutting a name out of a line
+    never splits the rest into separate extracts. Undecided elements and elements left
+    out in full give nothing. Order is the order first seen (file, then element).
     """
     merged: dict[str, dict] = {}
     for d in docs:
@@ -379,16 +392,14 @@ def extracts(docs: list[dict]) -> list[dict]:
             dec = d["decisions"].get(el["id"])
             if not dec:
                 continue
-            for a, b in el["parts"]:
-                for piece, r in redacted_text(d["text"], a, b, dec["redactions"]):
-                    text = " ".join(piece.split())
-                    key = _norm(text)
-                    if r is not None or not key:
-                        continue
-                    item = merged.setdefault(key, {"text": text, "sources": []})
-                    item["sources"].append({"file": d["name"], "file_sha256": d["sha256"], "element": el["id"],
-                                            "speaker": el["who"] or el["label"], "time": el["t"] or "",
-                                            "decision": dec["decision"], "reviewer": dec["reviewer"], "decided": dec["ts"]})
+            text = extract_text(d["text"], el, dec["redactions"])
+            key = _norm(text)
+            if not key:
+                continue
+            item = merged.setdefault(key, {"text": text, "sources": []})
+            item["sources"].append({"file": d["name"], "file_sha256": d["sha256"], "element": el["id"],
+                                    "speaker": el["who"] or el["label"], "time": el["t"] or "",
+                                    "decision": dec["decision"], "reviewer": dec["reviewer"], "decided": dec["ts"]})
     return list(merged.values())
 
 
