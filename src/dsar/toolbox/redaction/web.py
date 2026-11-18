@@ -62,6 +62,27 @@ def _owner(path: Path) -> Path | None:
     return next((out for out in _outputs() if path.is_relative_to(out)), None)
 
 
+def friendly(path: Path) -> str:
+    """A plain name for a review folder: what it holds and when it was made."""
+    import re
+    from datetime import datetime
+    name = path.name
+    m = re.search(r"(\d{4})(\d{2})(\d{2})T\d{6}Z", name) or re.search(r"(\d{4})-(\d{2})-(\d{2})", name)
+    when = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).strftime("%-d %b") if m else ""
+    s = re.search(r"_score(\d+)$", name)
+    if s:
+        what = f"Items scored {s.group(1)}"
+    elif name.startswith("review_stack_"):
+        what = "Workbook items"
+    elif name.startswith("deep_dive"):
+        what = "Deep-dive documents"
+    elif name.startswith("close_review"):
+        what = "Copy of the Call AI interview"
+    else:
+        what = name.replace("_", " ")
+    return f"{what} ({when})" if when else what
+
+
 def _label(path: Path) -> str:
     s = current_app.config["DSAR"]
     out = _owner(path)
@@ -87,7 +108,7 @@ def index():
     sources = markup.repeat_sources([v for v in loaded.values() if str(v[0]) not in skip])
     for fid, (path, docs) in loaded.items():
         f = markup.Folder(path, "", None)
-        rows.append({"id": fid, "label": _label(path), "files": len(docs), "left_out": str(path) in skip,
+        rows.append({"id": fid, "label": _label(path), "name": friendly(path), "files": len(docs), "left_out": str(path) in skip,
                      "events": sum(1 for _ in f.events.lines()) if f.events.path.exists() else 0,
                      "sections": markup.section_counts(docs, markup.repeats_for(docs, sources))})
     live = [r for r in rows if not r["left_out"]]

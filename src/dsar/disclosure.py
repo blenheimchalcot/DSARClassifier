@@ -35,6 +35,9 @@ DECISIONS = [EXTRACT, RELEASE, RELEASE_REDACTED, WITHHOLD, NOT_SUBJECT]
 # (personal_data_report.send_to_reviewer): its report content then comes only from
 # what is extracted there. Not offered as a choice on the Review page.
 IN_REVIEWER = "Reviewed in the Personal Data Reviewer"
+# Recorded when an item is taken out of review because its score is below the case's review
+# threshold (operator scope decision): an explicit record that it was not reviewed, and why.
+OUT_OF_SCOPE = "Not reviewed: below the review threshold"
 REASONS = [r for r in review.REASONS if r != "None"]
 ASSESSMENTS = review.ASSESSMENTS
 
@@ -336,6 +339,18 @@ def record(conn: sqlite3.Connection, chunk_id: str, data: dict, reviewer: str) -
     conn.commit()
     return {"decision_id": did, "decision": decision, "chunk_id": chunk_id, "content_sha256": content_sha256(content),
             "spans": len(keep), "model_score": row["score"], "adjusted_score": adjusted, "reason": reason}
+
+
+def record_out_of_scope(conn: sqlite3.Connection, chunk_id: str, reviewer: str, note: str) -> int:
+    """Take an item out of review (scope decision): append-only, like any decision."""
+    row = conn.execute("SELECT c.content, cl.score FROM chunks c LEFT JOIN classifications cl ON cl.chunk_id = c.chunk_id "
+                       "WHERE c.chunk_id = ?", (chunk_id,)).fetchone()
+    cur = conn.execute(
+        "INSERT INTO decisions (chunk_id, content_sha256, model_score, decision, notes, reviewer, decided_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (chunk_id, content_sha256(row["content"] if row else ""), row["score"] if row else None, OUT_OF_SCOPE, note,
+         reviewer, db._now()))
+    return cur.lastrowid
 
 
 def record_in_reviewer(conn: sqlite3.Connection, chunk_id: str, content_sha: str, file: str, reviewer: str) -> int:

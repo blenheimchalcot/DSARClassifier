@@ -974,7 +974,7 @@ function undecidedKey(k){const [fi,id]=splitKey(k);return !DOCS[fi].decisions[id
 // ---- Section views: every file of the folder at once -------------------------------------------
 // review: undecided, scored 7+ (or not yet scored) | low: undecided, scored below 7
 // repeats: undecided, same text as a decided element | done: every decided element
-const SECTIONS={review:"To review",low:"6 and below",repeats:"Repeats",conflicts:"Conflicts",done:"Reviewed"};
+const SECTIONS={review:"To review",low:"Below 7 (no decision)",repeats:"Repeats",conflicts:"Conflicts",done:"Reviewed"};
 const DUP="Duplicate – already in the Personal Data Report";
 function di(fid,file){return DOCS.findIndex(d=>(d.fid||"")===(fid||"")&&d.name===file)}
 function sc(el){const s=el.score;return s&&s.score!=null?s.score:null}
