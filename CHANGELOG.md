@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.1 (2026-11-18)
+
+### Changed
+- **Personal Data Report: extracts as one flat, unnumbered block** in the extracts row (no *Extract N* rows); markdown `**` removed from the report text. The register keeps numbers and exact text.
+- **One review page:** the Personal Data Reviewer replaces Review in the top bar. Unreviewed classified items are brought in by score (`review intake`), items below 7 showing every paragraph, and every file has whole-item Extract / Leave out. Repeats group identical text (*Confirm all*).
+- **Context** button on every element in the Personal Data Reviewer and on the Review page: the whole document, the whole original item, and the conversation (email thread or chat) around it, oldest first.
+- Repeats show your earlier decision first, then the repeat to decide.
+- **Personal Data Reviewer sections**, across every file in a folder: **To review (7+)** (filter by score), **6 and below** (filter by score; extract one if it should be in), **Repeats** (each beside the element it matches, with *Confirm match*, *Not a match* and *Confirm all*), and **Reviewed** (filter by decision, in the report or not, by hand or copied, reason, score band). *By file* keeps the per-file view. Each element carries its file, so decisions go to the right file and hash.
+- **Personal Data Reviewer: only elements the model scores 7+ need a decision** (`REVIEW_MIN_SCORE`, operator instruction). Elements scored below 7 fold into a *Below 7* bar: no decision needed and nothing in the report, unless the reviewer opens one and extracts it. Elements not yet scored still need a decision. Elements with no letters or digits (`---`) need no decision either.
+- Review-stack files show the item's own classification (model score, reason, evidence) at the top and in the file list.
+- **Personal Data Reviewer: repeats.** An undecided element whose text you have already decided (in any of the request's folders) is folded into *Repeats*. **Apply the same decisions** records each one as your decision, with `copied_from` in the event log. Text extracted elsewhere becomes *Leave out: Duplicate – already in the Personal Data Report* (your practice); text left out for a reason gets the same reason; cuts are copied only onto identical text. Text you decided both ways is never copied. Short text must match exactly. The Report page shows how many undecided elements are repeats.
+- **Fixed: text cut short after an emoji.** The browser counts an emoji as two characters, so text after one was shown a character or two short, and a *Leave part out* cut after it could land off. Such characters are now shown as □ (the file is unchanged), in the Personal Data Reviewer and on the Review page.
+- Personal Data Reviewer: the reason boxes for **Leave out** and **Leave part out** open directly under the buttons, right-aligned, instead of after the element's text. *Leave out (Enter)* and *Cancel (Esc)* come first, with the reason below. The buttons show their keys: **E** Extract, **L** Leave out, **P** Leave part out (A and R still work). Esc closes *Leave part out* without asking when nothing is marked yet.
+- **Fixed: an element extracted in part is one extract**, with its lines kept and the parts left out removed. Before, each stretch of text between cuts became its own extract, with its lines run together. A cut that spans a line break keeps the break; lines left empty are dropped. Text is never tidied beyond the cuts.
+- Report preview: each source of each extract has **Edit in Personal Data Reviewer**, which opens that file with the element expanded and centred, ready to *Leave part out*. An extract chosen in Review instead has **Narrow in Personal Data Reviewer**, which sends that item as a one-item review stack. The Personal Data Reviewer links back to the Report preview.
+- **Fixed: a workbook 'Disclose' no longer puts the whole passage in the Personal Data Report.** It carried headers, quoted threads and other people's details, including text left out in the Personal Data Reviewer. Such items now wait until passages are chosen. Any extract containing text left out in the Personal Data Reviewer (other than as a duplicate or already reviewed) is held out of the report and listed as a conflict.
+- **Report page**: *Left to process*, grouped with titles, dates, scores and workbook notes, and a **Preview** laid out like the Word table. Outstanding items can be sent as a numbered **review stack** to the Personal Data Reviewer, to step through them there: each file is the item's exact text, and the report then takes them only from what is extracted.
+- Top bar: **Cases** first, then **Current case: <ref>**.
+- A request is worked entirely from its **main case**. Review, Report and the Personal Data Reviewer use the deeper search's database and folders directly, with no switching. Every change is logged in the main case and in the case holding the data. `dsar personal-data-report` works from the main case too.
+
 ## 0.3.0 (2026-11-17)
 
 ### Upgrading from an earlier pull of main

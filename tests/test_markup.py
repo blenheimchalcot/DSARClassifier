@@ -178,3 +178,92 @@ def test_server_needs_token_and_stays_in_folder(folder: markup.Folder):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_an_element_extracted_in_part_is_one_extract_with_its_lines(tmp_path):
+    """Cutting names out of a block must not split the rest into separate extracts or run its lines together."""
+    folder = tmp_path / "f"
+    folder.mkdir()
+    text = ("Meeting Metadata\nTitle: Interview (Sam)\nHost: Pat Person\nParticipants: Sam Sample, Pat Person\n"
+            "Date: 21 Jul 2026\n")
+    (folder / "01_meeting.txt").write_text(text)
+    f = markup.Folder(folder, "R", None)
+    doc = f.docs()[0]
+    el = doc["elements"][0]
+    cut = lambda s: {"start": text.index(s), "end": text.index(s) + len(s), "reason": markup.REASONS[0]}
+    f.act({"file": doc["name"], "sha256": doc["sha256"], "action": "decide", "element": el["id"],
+           "decision": "redact_partial",
+           "redactions": [cut("Pat Person\n"), cut(", Pat Person"), cut("Date: 21 Jul 2026")]})
+    items = markup.extracts(f.docs())
+    assert len(items) == 1
+    assert items[0]["text"] == "Meeting Metadata\nTitle: Interview (Sam)\nHost:\nParticipants: Sam Sample"
+    # The cut "Pat Person\n" spanned a line break: the break stays, so "Host:" and "Participants" stay on separate lines.
+
+
+def test_repeats_follow_the_reviewers_decisions_and_apply_with_one_click(tmp_path):
+    from dsar import webapp
+    from tests.test_webapp import client_for
+
+    data = tmp_path / "DSAR-REP-1" / "data"
+    (data / "output").mkdir(parents=True)
+    a, b = data / "output" / "deep", data / "output" / "stack"
+    a.mkdir(), b.mkdir()
+    para = {"ext": "Sam Sample led the toddler group for five years.",
+            "out": "Pat Person will send the contract to the team on Friday.",
+            "mix": "This sentence was extracted in one place and left out in another."}
+    (a / "01_a.txt").write_text(f"{para['ext']}\n\n{para['out']}\n\n{para['mix']}\n\nKind regards\n")
+    (a / "02_b.txt").write_text(f"{para['mix']}\n")
+    (b / "01_c.txt").write_text(f"{para['ext']}\n\n{para['out']}\n\n{para['mix']}\n\nKind regards\n\nSomething new about Sam.\n")
+    fa = markup.Folder(a, "R", None)
+    for d in fa.docs():
+        for el in d["elements"]:
+            txt = markup.element_text(d["text"], el)
+            body = {"file": d["name"], "sha256": d["sha256"], "action": "decide", "element": el["id"]}
+            if txt.startswith("Sam Sample") or (txt.startswith("This sentence") and d["name"] == "01_a.txt"):
+                fa.act({**body, "decision": "release"})
+            else:
+                fa.act({**body, "decision": "redact_full", "reason": markup.REASONS[0]})
+    fb = markup.Folder(b, "R", None)
+    sources = markup.repeat_sources([(a, fa.docs()), (b, fb.docs())])
+    reps = markup.repeats_for(fb.docs(), sources)["01_c.txt"]
+    by_text = {markup.element_text(fb.docs()[0]["text"], el).strip(): reps.get(el["id"]) for el in fb.docs()[0]["elements"]}
+    assert by_text[para["ext"]]["reason"] == markup.DUPLICATE             # extracted elsewhere: a duplicate here
+    assert by_text[para["out"]]["reason"] == markup.REASONS[0]            # same real reason copied
+    assert by_text["Kind regards"]["reason"] == markup.REASONS[0]         # short text: exact match only
+    assert by_text[para["mix"]] is None                                   # decided both ways: you decide
+    assert by_text["Something new about Sam."] is None                    # new text: you decide
+
+    app, c = client_for(webapp.Settings.for_case(data))
+    with app.test_request_context():
+        from dsar.toolbox.redaction import web
+        fid = next(k for k, p in web.folders().items() if p.name == "stack")
+    j = c.get(f"/toolbox/redaction/f/{fid}/api/docs").get_json()
+    assert len(j["repeats"]["01_c.txt"]) == 3
+    r = c.post(f"/toolbox/redaction/f/{fid}/api/apply-repeats", json={}, headers={"X-CSRF": c.csrf})
+    assert r.get_json()["applied"] == 3
+    events = [e for e in map(__import__("json").loads, fb.events.lines()) if e.get("copied_from")]
+    assert len(events) == 3 and all(e["reviewer"] == "Test Reviewer" and e["copied_from"].startswith("deep/") for e in events)
+    left = [el for d in markup.Folder(b, "", None).docs() for el in d["elements"] if el["id"] not in d["decisions"]]
+    assert len(left) == 2
+
+
+def test_emoji_are_one_character_on_screen():
+    text = "Hi 🚀 there: Summary"
+    shown = markup.screen_text(text)
+    assert len(shown) == len(text) and shown == "Hi □ there: Summary"
+    assert len(shown.encode("utf-16-le")) // 2 == len(text)              # what the browser counts
+
+
+def test_only_elements_scored_7_or_more_need_a_decision(tmp_path):
+    folder = tmp_path / "f"
+    folder.mkdir()
+    (folder / "01_a.txt").write_text("Sam Sample's grievance about the rota.\n\nKind regards, Pat\n\nNot scored yet.\n")
+    f = markup.Folder(folder, "R", None)
+    doc = f.docs()[0]
+    with (folder / markup.SCORES_NAME).open("w") as fh:
+        for el, score in zip(doc["elements"], (8, 2)):
+            fh.write(json.dumps({"file": doc["name"], "sha256": doc["sha256"], "span": el["parts"], "score": score}) + "\n")
+    doc = f.docs()[0]
+    assert [el["below"] for el in doc["elements"]] == [False, True, False]
+    assert markup.undecided_count(doc) == 2                    # the 8 and the unscored one; the 2 needs nothing
+    assert markup.extracts([doc]) == []                         # and nothing below 7 goes in by itself

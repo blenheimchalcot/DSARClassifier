@@ -51,26 +51,69 @@ def read_link(data_dir: Path) -> dict:
 
 @dataclass
 class Family:
-    """One request: its main case, the searches under it, and the case where it is reviewed."""
+    """One request: its main case, the searches under it, and the case whose data is reviewed.
+
+    Everything is worked from the main case: Review, Report and the Personal Data Reviewer
+    read and write the review case's database and folders (a deeper search marked
+    review_here, else the main case itself), and every change is logged in the main case
+    and in the case holding the data.
+    """
     main_ref: str
     main_dir: Path
     review_ref: str
     review_dir: Path
     children: list[dict]
+    subject_name: str = ""
+
+    @property
+    def review_output(self) -> Path:
+        return self.review_dir / "output"
+
+    @property
+    def split(self) -> bool:
+        return self.review_dir.resolve() != self.main_dir.resolve()
+
+    def logs(self, current_output: Path) -> list[Path]:
+        """Audit logs a change to the review data goes to: the current case's, the main case's and the data's."""
+        out: list[Path] = []
+        for d in (Path(current_output), self.main_dir / "output", self.review_output):
+            if all(d.resolve() != o.resolve() for o in out):
+                out.append(d)
+        return out
+
+
+def children_of(root: Path | None, main_ref: str) -> list[dict]:
+    """Searches under a main case, from their data/case.json only (no audit-log checks)."""
+    if root is None or not Path(root).is_dir():
+        return []
+    out = []
+    for case_dir in sorted(Path(root).iterdir(), key=lambda p: p.name.casefold()):
+        link = read_link(case_dir / "data")
+        if link.get("parent") == main_ref and (case_dir / "data" / "output").is_dir():
+            out.append({"case_ref": case_dir.name, "data_dir": case_dir / "data", "role": link.get("role", ""),
+                        "review_here": bool(link.get("review_here"))})
+    return out
 
 
 def family(settings) -> Family:
-    """Work out the request the current case belongs to. The report and the release checklist live in
-    the main case; review happens in the search marked review_here (else in the main case)."""
+    """Work out the request the current case belongs to."""
+    from dsar import webapp
+
     main_ref, main_dir = settings.case_ref, settings.data_dir
     if settings.parent_ref and settings.cases_root:
         parent = Path(settings.cases_root) / settings.parent_ref / "data"
         if (parent / "output").is_dir():
             main_ref, main_dir = settings.parent_ref, parent
-    children = [c for c in discover(settings.cases_root) if c.get("parent") == main_ref]
-    review = next((c for c in children if c.get("review_here")), None)
-    return Family(main_ref, main_dir, review["case_ref"] if review else main_ref,
-                  review["data_dir"] if review else main_dir, children)
+    children = children_of(settings.cases_root, main_ref)
+    review = next((c for c in children if c["review_here"]), None)
+    review_ref, review_dir = (review["case_ref"], review["data_dir"]) if review else (main_ref, main_dir)
+    subject = settings.subject_name
+    if not subject:
+        for d in (review_dir, main_dir):
+            subject = webapp.Settings.for_case(d).subject_name
+            if subject:
+                break
+    return Family(main_ref, main_dir, review_ref, review_dir, children, subject)
 
 
 class CaseError(Exception):

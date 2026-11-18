@@ -32,6 +32,10 @@
 <p class="muted small">Select text, then <b>Extract selection</b> or <b>Redact selection</b>. <span class="lg ev">Model evidence</span> <span class="lg ex">To extract</span> <span class="lg rd">To redact</span></p>
 <div id="text" class="itemtext"></div>
 
+<h2>Context</h2>
+<p class="small"><button class="btn sm" type="button" data-ctab="item">Whole item</button> <button class="btn sm" type="button" data-ctab="conversation">Conversation</button> <span class="muted">the complete original and the messages around it, oldest first; this one is marked ▶</span></p>
+<div id="ctxout" class="ctxout" hidden></div>
+
 <h2>Decision</h2>
 <div class="card" id="decide">
   <div class="choices">
@@ -77,11 +81,27 @@
 </ul>
 {% endif %}
 
-<script type="application/json" id="item-data">{{ {"content": it.content, "sha": it.content_sha256, "evidence": it.evidence_spans,
+<script type="application/json" id="item-data">{{ {"content": it.screen_content, "sha": it.content_sha256, "evidence": it.evidence_spans,
   "current": it.current, "decide_url": url_for('review.decide', chunk_id=it.chunk_id),
   "EXTRACT": EXTRACT, "RELEASE_REDACTED": RELEASE_REDACTED, "WITHHOLD": WITHHOLD} | tojson }}</script>
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='toolbox.js') }}"></script>
 <script src="{{ url_for('static', filename='review.js') }}"></script>
+<script>
+(() => {
+  let ctx = null;
+  const out = document.getElementById("ctxout");
+  const esc = DSAR.esc;
+  const show = async tab => {
+    if (!ctx) ctx = await DSAR.get("{{ url_for('review.context_api', chunk_id=it.chunk_id) }}");
+    const list = ctx[tab] || [];
+    out.hidden = false;
+    out.innerHTML = list.length ? list.map(c => `<div class="ctxc ${c.this ? "here" : ""}" ${c.this ? 'id="ctxhere"' : ""}><div class="ctxm">${c.this ? "<b>▶ This one</b> · " : ""}${esc((c.date || "").slice(0, 16).replace("T", " "))}${c.from ? " · From: " + esc(c.from) : ""}${c.subject ? " · <b>" + esc(c.subject) + "</b>" : ""}${c.score != null ? " · model " + c.score : ""}${c.about_subject ? "" : " · <i>does not name the subject</i>"}</div><div class="ctxt">${esc(c.content)}</div></div>`).join("")
+      : `<p class="muted small">Nothing more: this item has no ${tab === "item" ? "other parts" : "thread"}.</p>`;
+    const h = document.getElementById("ctxhere"); if (h) h.scrollIntoView({block: "center"});
+  };
+  document.querySelectorAll("[data-ctab]").forEach(b => b.onclick = () => show(b.dataset.ctab));
+})();
+</script>
 {% endblock %}

@@ -90,7 +90,11 @@ def create_app(settings: Settings) -> Flask:
     @app.context_processor
     def _globals():
         from flask import session
-        return {"settings": settings, "tools": toolbox.TOOLS, "version": __version__,
+        subject = settings.subject_name
+        if settings.case_bound and not subject:
+            from dsar.webapp import cases
+            subject = cases.family(settings).subject_name      # e.g. a main case whose config is in its deeper search
+        return {"settings": settings, "tools": toolbox.TOOLS, "version": __version__, "subject_name": subject,
                 "reviewer": session.get("name", ""), "csrf": session.get("csrf", "")}
 
     return app

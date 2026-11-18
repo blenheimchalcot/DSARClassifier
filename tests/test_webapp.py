@@ -206,7 +206,7 @@ def test_redaction_tool_is_mounted_with_the_signed_in_reviewer(case):
     assert entry["data"]["reviewer"] == "Test Reviewer"
     # The extracts folder holds .txt files but is never offered for redaction.
     listing = c.get("/toolbox/redaction/").get_data(as_text=True)
-    assert len(re.findall(r"/toolbox/redaction/f/[0-9a-f]{12}/", listing)) == 1
+    assert len(set(re.findall(r"/toolbox/redaction/f/[0-9a-f]{12}/", listing))) == 1          # one folder (linked per section)
 
 
 def _other_cases(case):

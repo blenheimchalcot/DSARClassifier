@@ -10,10 +10,11 @@ range can never land on other text. Decisions are append-only (`decisions`,
 changed.
 
 Decisions imported from workbooks (`review_decisions`) keep their own wording and
-count as decided. For the report: a workbook "Disclose" is taken as the whole
-passage, flagged so it can be narrowed; a workbook "Disclose with redactions"
-recorded what to redact only in notes, so it stays outstanding until the passages
-are selected here.
+count as decided. Neither workbook "Disclose" nor "Disclose with redactions" puts
+anything in the report by itself: the workbook said nothing about which passages
+are the subject's data (a whole email carries headers, quoted threads and other
+people's details), so both stay outstanding until the passages are chosen here or
+in the Personal Data Reviewer.
 """
 import hashlib
 import json
@@ -30,13 +31,20 @@ RELEASE_REDACTED = "Release in full with redactions"
 WITHHOLD = "Withhold (exemption applies)"
 NOT_SUBJECT = "Not the subject's personal data"
 DECISIONS = [EXTRACT, RELEASE, RELEASE_REDACTED, WITHHOLD, NOT_SUBJECT]
+# Set when an item is sent to the Personal Data Reviewer as part of a review stack
+# (personal_data_report.send_to_reviewer): its report content then comes only from
+# what is extracted there. Not offered as a choice on the Review page.
+IN_REVIEWER = "Reviewed in the Personal Data Reviewer"
+# Recorded when an item is taken out of review because its score is below the case's review
+# threshold (operator scope decision): an explicit record that it was not reviewed, and why.
+OUT_OF_SCOPE = "Not reviewed: below the review threshold"
 REASONS = [r for r in review.REASONS if r != "None"]
 ASSESSMENTS = review.ASSESSMENTS
 
 # Workbook decisions (dsar.review.DECISIONS) and what they mean for the report.
 WB_DISCLOSE, WB_REDACT, WB_WITHHOLD, WB_NOT_SUBJECT = review.DECISIONS
 
-TO_REVIEW, NEEDS_PASSAGES, DONE = "To review", "Needs passages", "Done"
+TO_REVIEW, NEEDS_PASSAGES, DONE = "To review", "Choose what to extract", "Done"
 
 
 class DecisionError(ValueError):
@@ -173,8 +181,80 @@ def item(conn: sqlite3.Connection, chunk_id: str) -> dict | None:
             "evidence_check": evidence.verify(r["score"], r["evidence"], content, r["subject"]),
             "evidence_spans": review.evidence_spans(content, r["evidence"] or ""),
             "content": content, "content_sha256": content_sha256(content),
+            # One unit per character in the browser, so selected positions are the content's positions.
+            "screen_content": re.sub("[\U00010000-\U0010FFFF]", "\u25a1", content),
             "siblings": siblings, "history": hist, "current": hist[-1] if hist else None,
             "status": status_of(latest_for(conn, chunk_id))}
+
+
+CONTEXT_LIMIT = 300
+
+
+def _ctx_row(r, this: str) -> dict:
+    meta = _meta(r)
+    st = r["source_type"]
+    return {"chunk_id": r["chunk_id"], "this": r["chunk_id"] == this, "source_type": st,
+            "date": report._sent_field(meta, st), "from": report._from_field(meta, st), "to": report._to_field(meta, st),
+            "subject": r["subject"] or "", "about_subject": bool(r["alias_matched"]), "score": r["score"],
+            "content": re.sub("[\U00010000-\U0010FFFF]", "\u25a1", r["content"] or "")}
+
+
+def context(conn: sqlite3.Connection, chunk_id: str) -> dict | None:
+    """The whole item a chunk comes from, and the conversation around it, for a reviewer to read.
+
+    Item: an email is one chunk; any other file (document, spreadsheet, chat export) is every
+    chunk from the same source file, in the order ingested. Conversation: an email's thread, or
+    for a chat every chunk of the same chat file, oldest first. Items that never mention the
+    subject are included too (marked), so the reviewer sees the whole exchange.
+    """
+    sql = ("SELECT c.rowid AS rid, c.*, cl.score FROM chunks c LEFT JOIN classifications cl ON cl.chunk_id = c.chunk_id ")
+    r = conn.execute(sql + "WHERE c.chunk_id = ?", (chunk_id,)).fetchone()
+    if r is None:
+        return None
+    st = r["source_type"]
+    if st == "email":
+        item = conn.execute(sql + "WHERE c.source_path = ? AND c.item_ref = ? ORDER BY c.rowid",
+                            (r["source_path"], r["item_ref"])).fetchall()
+    else:
+        item = conn.execute(sql + "WHERE c.source_path = ? ORDER BY c.rowid LIMIT ?",
+                            (r["source_path"], CONTEXT_LIMIT)).fetchall()
+    conv = []
+    if r["thread_id"]:
+        conv = conn.execute(sql + "WHERE c.thread_id = ? LIMIT ?", (r["thread_id"], CONTEXT_LIMIT)).fetchall()
+    elif st == "chat_message":
+        conv = item
+    rows = lambda rs: [_ctx_row(x, chunk_id) for x in rs]
+    conv_rows = sorted(rows(conv), key=lambda x: (x["date"] or "~", x["chunk_id"]))
+    return {"chunk_id": chunk_id, "source_type": st, "source_path": r["source_path"], "item": rows(item),
+            "conversation": conv_rows, "thread_size": len(conv_rows)}
+
+
+def find_chunk(conn: sqlite3.Connection, text: str, document: str = "") -> str | None:
+    """The chunk a file copied out of the database came from: by the email's Message-ID in the file
+    if it has one (exact), else the chunk containing a distinctive line of this text."""
+    m = re.search(r"^Message-ID:\s*(\S+)", document, re.M)
+    if m:
+        row = conn.execute("SELECT chunk_id FROM chunks WHERE json_extract(metadata_json, '$.message_id') = ? "
+                           "ORDER BY alias_matched DESC LIMIT 1", (m.group(1).strip(),)).fetchone()
+        if row:
+            return row[0]
+    lines = sorted((ln.strip() for ln in text.splitlines() if len(ln.strip()) >= 30), key=len, reverse=True)
+    for ln in lines[:3]:
+        row = conn.execute("SELECT chunk_id FROM chunks WHERE instr(content, ?) > 0 ORDER BY alias_matched DESC LIMIT 1",
+                           (ln[:200],)).fetchone()
+        if row:
+            return row[0]
+    return None
+
+
+def intake(conn: sqlite3.Connection) -> dict[int, list[str]]:
+    """Classified items with no decision yet, by model score (5 and above): what can be brought into review."""
+    decided = latest(conn)
+    out: dict[int, list[str]] = {}
+    for r in conn.execute(QUEUE_SQL):
+        if r["score"] is not None and r["score"] >= 5 and r["chunk_id"] not in decided:
+            out.setdefault(r["score"], []).append(r["chunk_id"])
+    return dict(sorted(out.items(), reverse=True))
 
 
 def latest_for(conn: sqlite3.Connection, chunk_id: str) -> dict | None:
@@ -261,6 +341,30 @@ def record(conn: sqlite3.Connection, chunk_id: str, data: dict, reviewer: str) -
             "spans": len(keep), "model_score": row["score"], "adjusted_score": adjusted, "reason": reason}
 
 
+def record_out_of_scope(conn: sqlite3.Connection, chunk_id: str, reviewer: str, note: str) -> int:
+    """Take an item out of review (scope decision): append-only, like any decision."""
+    row = conn.execute("SELECT c.content, cl.score FROM chunks c LEFT JOIN classifications cl ON cl.chunk_id = c.chunk_id "
+                       "WHERE c.chunk_id = ?", (chunk_id,)).fetchone()
+    cur = conn.execute(
+        "INSERT INTO decisions (chunk_id, content_sha256, model_score, decision, notes, reviewer, decided_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (chunk_id, content_sha256(row["content"] if row else ""), row["score"] if row else None, OUT_OF_SCOPE, note,
+         reviewer, db._now()))
+    return cur.lastrowid
+
+
+def record_in_reviewer(conn: sqlite3.Connection, chunk_id: str, content_sha: str, file: str, reviewer: str) -> int:
+    """Mark an item as sent to the Personal Data Reviewer (append-only, like any decision)."""
+    row = conn.execute("SELECT cl.score FROM chunks c LEFT JOIN classifications cl ON cl.chunk_id = c.chunk_id "
+                       "WHERE c.chunk_id = ?", (chunk_id,)).fetchone()
+    cur = conn.execute(
+        "INSERT INTO decisions (chunk_id, content_sha256, model_score, decision, notes, reviewer, decided_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (chunk_id, content_sha, row["score"] if row else None, IN_REVIEWER, f"Review stack file: {file}", reviewer,
+         db._now()))
+    return cur.lastrowid
+
+
 def _paragraphs(text: str) -> str:
     """Tidy an extract: one line per paragraph, inner whitespace collapsed."""
     paras = [" ".join(p.split()) for p in re.split(r"\n\s*\n", text)]
@@ -288,6 +392,8 @@ def report_inputs(conn: sqlite3.Connection, min_score: int = MIN_SCORE) -> dict:
                 "subject": r["subject"] or "", "decision": dec["decision"], "decision_source": dec["source"],
                 "reviewer": dec["reviewer"], "decided_at": dec["at"], "content_sha256": content_sha256(content)}
         if dec["source"] == "app":
+            if dec["decision"] == IN_REVIEWER:
+                continue            # its extracts come from the review stack folder
             if dec.get("content_sha256") != base["content_sha256"]:
                 changed.append({"chunk_id": cid, "why": "text changed since the decision"})
                 continue
@@ -299,7 +405,9 @@ def report_inputs(conn: sqlite3.Connection, min_score: int = MIN_SCORE) -> dict:
             elif dec["decision"] in (RELEASE, RELEASE_REDACTED):
                 documents.append({**base})
         elif dec["decision"] == WB_DISCLOSE:
-            pieces.append({**base, "text": _paragraphs(content), "span": "whole passage"})
+            # Never the whole passage: it carries headers, quoted threads and other people's
+            # details. Only passages chosen in Review or the Personal Data Reviewer go in.
+            outstanding.append({"chunk_id": cid, "why": "workbook 'Disclose': choose the passages", "score": r["score"]})
             whole.append(cid)
         elif dec["decision"] == WB_REDACT:
             outstanding.append({"chunk_id": cid, "why": "workbook 'Disclose with redactions': select the passages",

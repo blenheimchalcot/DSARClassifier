@@ -1043,14 +1043,14 @@ def personal_data_report_cmd(config_path: str | None, reviewer: str, run: audit.
 
     data_dir = _data_dir()
     settings = webapp.Settings.for_case(data_dir, Path(config_path) if config_path else None)
-    db_path = data_dir / "dsar.sqlite"
+    fam = cases.family(settings)          # from a main case, the deeper search's data is used
+    db_path = fam.review_dir / "dsar.sqlite"
     if not db_path.is_file():
-        raise click.ClickException(f"No dsar.sqlite in {data_dir}")
-    folders = redaction_web.case_folders(settings.output_dir)
+        raise click.ClickException(f"No dsar.sqlite in {fam.review_dir}")
+    folders = redaction_web.case_folders(fam.review_output)
     with db.connect(db_path) as conn:
         db.init_schema(conn)
-        fam = cases.family(settings)
-        result = personal_data_report.build(conn, settings.output_dir, fam.main_ref, settings.subject_name,
+        result = personal_data_report.build(conn, fam.review_output, fam.main_ref, fam.subject_name,
                                             folders, reviewer, report_output_dir=fam.main_dir / "output")
     click.echo(f"{'DRAFT ' if result['draft'] else ''}Personal Data Report: {result['report']}")
     click.echo(f"  {result['extracts']} extracts ({result['from_review']} from review, "

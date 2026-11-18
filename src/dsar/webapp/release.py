@@ -131,7 +131,7 @@ def documents(main_ref: str, main_output: Path) -> dict:
             if r is not None:
                 enclosures.append({"name": line, "present": bool(r["file"]), "file": r["file"]})
                 continue
-            hit = next((p for p in prepared if _norm(line) in _norm(p.stem)), None)
+            hit = next((p for p in prepared if _norm(line) in _norm(p.stem) or (len(_norm(p.stem)) >= 8 and _norm(p.stem) in _norm(line))), None)
             enclosures.append({"name": line, "present": bool(hit), "file": str(hit.relative_to(docs_dir)) if hit else ""})
     ready = all(r["status"] == "ready" for r in rows) and all(e["present"] for e in enclosures) and bool(rows)
     return {"rows": rows, "enclosures": enclosures, "docs_dir": str(docs_dir) if docs_dir else "",
@@ -187,10 +187,12 @@ def _computed(review_dir: Path, main_output: Path, folders: dict[str, Path]) -> 
     rows.append({"label": "Passages selected for workbook 'Disclose with redactions'", "done": need == 0,
                  "link": "review", "detail": f"{need} need passages" if need else "none left"})
     whole = len(data["review"]["whole_from_workbook"])
-    rows.append({"label": "Whole-passage extracts narrowed (headers and other people's details out)",
-                 "done": whole == 0, "link": "report",
-                 "detail": f"{whole} whole passage(s) from workbook 'Disclose'" if whole else "none"})
-    undecided = [o for o in data["outstanding"] if "file" in o]
+    rows.append({"label": "Passages chosen for workbook 'Disclose' items", "done": whole == 0, "link": "report",
+                 "detail": f"{whole} item(s): nothing from them is in the report yet" if whole else "none"})
+    held = sum(1 for o in data["outstanding"] if o["why"].startswith("conflict"))
+    rows.append({"label": "No extract contains text left out in the Personal Data Reviewer", "done": held == 0,
+                 "link": "report", "detail": f"{held} held out of the report" if held else "none"})
+    undecided = [o for o in data["outstanding"] if o.get("file") and not o["why"].startswith("conflict")]
     n = sum(int(o["why"].split()[0]) for o in undecided)
     rows.append({"label": "Personal Data Reviewer folders fully decided", "done": not undecided, "link": "report",
                  "detail": f"{n} element(s) undecided in {len(undecided)} file(s)" if undecided else
@@ -200,6 +202,23 @@ def _computed(review_dir: Path, main_output: Path, folders: dict[str, Path]) -> 
     rows.append({"label": "Personal Data Report built (final, not draft)", "done": bool(final), "link": "report",
                  "detail": final["name"] if final else (f"latest is a draft: {built[0]['name']}" if built else "not built")})
     return rows
+
+
+def next_step(computed: list[dict], manual: list[dict], docs: dict) -> dict:
+    """The single most important thing to do now: review, then report, then documents, then sign-off, then send."""
+    for c in computed:
+        if not c["done"]:
+            where = "report" if c["label"].startswith("Personal Data Report built") else "review"
+            return {"text": f"{c['label']}: {c['detail']}", "where": where}
+    for d in docs.get("rows", []):
+        if d["status"] != "ready":
+            return {"text": f"{d['document']}: {d['status']}", "where": "docs"}
+    for m in manual:
+        if not m.get("done") and m["key"] != "sent":
+            return {"text": f"Confirm: {m['label']}", "where": "confirm"}
+    if not next((m for m in manual if m["key"] == "sent"), {}).get("done"):
+        return {"text": "Send the response and record it (Response sent)", "where": "confirm"}
+    return {"text": "Done: the response has been sent.", "where": ""}
 
 
 def status(fam, folders: dict[str, Path]) -> dict:
@@ -219,5 +238,6 @@ def status(fam, folders: dict[str, Path]) -> dict:
     docs = documents(fam.main_ref, main_output)
     left = (sum(not r["done"] for r in rows) + sum(not r["done"] for r in computed)
             + sum(r["status"] != "ready" for r in docs["rows"]) + sum(not e["present"] for e in docs["enclosures"]))
-    return {"computed": computed, "manual": rows, "documents": docs, "deadline": deadline, "days_left": days_left,
+    nxt = next_step(computed, rows, docs)
+    return {"computed": computed, "manual": rows, "documents": docs, "deadline": deadline, "days_left": days_left, "next": nxt,
             "left": left, "sent": bool(checks.get("sent", {}).get("done"))}

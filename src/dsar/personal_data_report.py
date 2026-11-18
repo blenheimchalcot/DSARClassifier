@@ -2,8 +2,8 @@
 The Personal Data Report: built from the case's decisions into the controller's template.
 
 Contents (extract text only; each piece of data once):
-  - passages extracted in the review queue (dsar.disclosure), and workbook
-    "Disclose" decisions taken as the whole passage;
+  - passages extracted in the review queue (dsar.disclosure) (workbook decisions
+    alone never put anything in);
   - passages released in the redaction tool's folders (markup.extracts).
 Identical extracts are merged. They are ordered by the source's date where one is
 known (a review item's sent date, or a YYYY-MM-DD in a redaction file's name),
@@ -67,15 +67,85 @@ def _norm(text: str) -> str:
     return re.sub(r"\W+", " ", text).strip().lower()
 
 
-def redaction_pieces(folders: dict[str, Path]) -> tuple[list[dict], list[dict]]:
+STACK_PREFIX = "review_stack_"
+STACK_INDEX = "stack_index.json"
+
+
+def _slug(text: str, n: int = 50) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "-", text).strip("-")[:n] or "item"
+
+
+def send_to_reviewer(conn, output_dir: Path, chunk_ids: list[str], reviewer: str, min_score: int | None = None,
+                     label: str = "") -> dict:
+    """Write these items into a new review stack folder for the Personal Data Reviewer.
+
+    Each file is the item's text exactly (its SHA-256 equals the decision's content
+    hash), named <NN>_<date>_<title>_<chunk id>.txt in the given order. Each item gets
+    an IN_REVIEWER decision, so the report takes its content only from that folder.
+    """
+    import json
+
+    from dsar import report as results
+
+    if not reviewer:
+        raise ValueError("sign in first")
+    folder = Path(output_dir) / (STACK_PREFIX + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + (f"_{label}" if label else ""))
+    folder.mkdir(parents=True, exist_ok=False)
+    if min_score is not None:
+        # Items brought in below 7 show every paragraph (their own score is already below the line).
+        from dsar.toolbox.redaction import markup
+        (folder / markup.SETTINGS_NAME).write_text(json.dumps({"min_score": min_score}), encoding="utf-8")
+    latest = disclosure.latest(conn)
+    index, written = {}, []
+    for n, cid in enumerate(dict.fromkeys(chunk_ids), start=1):
+        r = conn.execute("SELECT * FROM chunks WHERE chunk_id = ?", (cid,)).fetchone()
+        if r is None:
+            continue
+        try:
+            meta = json.loads(r["metadata_json"] or "{}")
+        except ValueError:
+            meta = {}
+        date = (results._sent_field(meta, r["source_type"]) or "")[:10] or "undated"
+        title = r["subject"] or Path(r["source_path"].replace("\\", "/")).name
+        name = f"{n:02d}_{date}_{_slug(title)}_{cid}.txt"
+        path = folder / name
+        path.write_text(r["content"] or "", encoding="utf-8")
+        sha = audit.sha256_file(path)
+        if sha != disclosure.content_sha256(r["content"] or ""):
+            raise ValueError(f"{name}: written file does not match the item's text")
+        did = disclosure.record_in_reviewer(conn, cid, sha, f"{folder.name}/{name}", reviewer)
+        prior = latest.get(cid) or {}
+        index[name] = {"chunk_id": cid, "sha256": sha, "decision_id": did, "previous_decision": prior.get("decision", ""),
+                       "previous_notes": prior.get("notes", ""), "previous_source": prior.get("source", "")}
+        written.append(name)
+    (folder / STACK_INDEX).write_text(json.dumps(index, indent=1), encoding="utf-8")
+    conn.commit()
+    return {"folder": str(folder), "items": len(written), "files": written, "paragraph_min_score": min_score,
+            "index_sha256": audit.sha256_file(folder / STACK_INDEX), "reviewer": reviewer}
+
+
+def _stack_skip(conn, path: Path) -> set[str]:
+    """Files in a review stack whose item has since been decided in Review (newest decision isn't IN_REVIEWER)."""
+    import json
+
+    idx = path / STACK_INDEX
+    if conn is None or not idx.is_file():
+        return set()
+    latest = disclosure.latest(conn)
+    return {name for name, v in json.loads(idx.read_text(encoding="utf-8")).items()
+            if latest.get(v["chunk_id"], {}).get("decision") != disclosure.IN_REVIEWER}
+
+
+def redaction_pieces(folders: dict[str, Path], conn=None) -> tuple[list[dict], list[dict]]:
     """Released passages from each redaction folder, and the undecided elements per file."""
     from dsar.toolbox.redaction import markup
 
     pieces, undecided = [], []
     for path in folders.values():
-        docs = markup.Folder(path, "", None).docs()
+        skip = _stack_skip(conn, path)
+        docs = [d for d in markup.Folder(path, "", None).docs() if d["name"] not in skip]
         for d in docs:
-            left = len(d["elements"]) - len(d["decisions"])
+            left = markup.undecided_count(d)
             if left:
                 undecided.append({"file": str(path / d["name"]), "why": f"{left} element(s) undecided in the Personal Data Reviewer"})
         for item in markup.extracts(docs):
@@ -133,6 +203,41 @@ def folder_rows(conn, folders: dict[str, Path]) -> list[dict]:
     return rows
 
 
+LEFT_OUT_MIN_CHARS = 25        # shorter left-out passages (a name, a greeting) are too common to compare
+# Left out because the text is in the report from elsewhere: not a conflict when it appears there.
+NOT_CONFLICTS = {"Duplicate – already in the Personal Data Report", "Already reviewed and assessed"}
+
+
+def left_out_passages(folders: dict[str, Path], conn=None) -> list[dict]:
+    """Every passage left out (in full or in part) in the Personal Data Reviewer folders, normalised."""
+    from dsar.toolbox.redaction import markup
+
+    out = []
+    for path in folders.values():
+        skip = _stack_skip(conn, path)
+        for d in markup.Folder(path, "", None).docs():
+            if d["name"] in skip:
+                continue
+            for dec in d["decisions"].values():
+                for r in dec["redactions"]:
+                    if r.get("reason") in NOT_CONFLICTS:
+                        continue
+                    norm = _norm(d["text"][r["start"]:r["end"]])
+                    if len(norm) >= LEFT_OUT_MIN_CHARS:
+                        out.append({"norm": norm, "file": str(path / d["name"])})
+    return out
+
+
+def conflict_with(piece: dict, left_out: list[dict]) -> str:
+    """The file whose left-out text this extract contains (from another source), or ''."""
+    text = _norm(piece["text"])
+    own = piece.get("source_path") if piece.get("origin") == "redaction" else None
+    for lo in left_out:
+        if lo["file"] != own and lo["norm"] in text:
+            return Path(lo["file"]).name
+    return ""
+
+
 def assemble(conn, folders: dict[str, Path]) -> dict:
     """Everything the report would contain now, merged and ordered, plus what is outstanding.
 
@@ -142,9 +247,19 @@ def assemble(conn, folders: dict[str, Path]) -> dict:
     excluded = [{"folder": str(r["path"]), **r["choice"]} for r in rows if not r["included"]]
     folders = {r["id"]: r["path"] for r in rows if r["included"]}
     review = disclosure.report_inputs(conn)
-    red_pieces, undecided = redaction_pieces(folders)
-    merged: dict[str, dict] = {}
+    red_pieces, undecided = redaction_pieces(folders, conn)
+    left_out = left_out_passages(folders, conn)
+    conflicts, kept = [], []
     for p in review["pieces"] + red_pieces:
+        hit = conflict_with(p, left_out)
+        if hit:
+            conflicts.append({"chunk_id": p.get("chunk_id"), "file": None if p.get("chunk_id") else p["source_path"],
+                              "why": f"conflict: contains text left out in the Personal Data Reviewer ({hit})",
+                              "text": p["text"]})
+        else:
+            kept.append(p)
+    merged: dict[str, dict] = {}
+    for p in kept:
         key = _norm(p["text"])
         if not key:
             continue
@@ -153,7 +268,7 @@ def assemble(conn, folders: dict[str, Path]) -> dict:
             entry["date"] = p["date"]
         entry["sources"].append(p)
     extracts = sorted(merged.values(), key=lambda e: (not e["date"], e["date"][:10]))
-    outstanding = review["outstanding"] + review["changed"] + undecided
+    outstanding = review["outstanding"] + review["changed"] + undecided + conflicts
     return {"extracts": extracts, "outstanding": outstanding, "review": review,
             "from_review": len(review["pieces"]), "from_redaction": len(red_pieces),
             "folders": [str(p) for p in folders.values()], "excluded_folders": excluded, "folder_rows": rows}
@@ -179,7 +294,19 @@ def _set_cell(cell, text: str) -> None:
             run._r.insert(0, copy.deepcopy(run_fmt))
 
 
+def report_text(text: str) -> str:
+    """An extract as it appears in the report: markdown bold markers (**) removed; the words are unchanged.
+    (The private register keeps the exact source text.)"""
+    return text.replace("**", "")
+
+
+def flat_extracts(extracts: list[dict]) -> str:
+    """All extracts as one block of text: one passage after another, a blank line between, no numbering."""
+    return "\n\n".join(report_text(e["text"]) for e in extracts)
+
+
 def _fill(template: Path, subject_name: str, extracts: list[dict]):
+    """Fill the template; returns (document, index of the table row holding the extracts)."""
     import docx
 
     doc = docx.Document(str(template))
@@ -195,49 +322,73 @@ def _fill(template: Path, subject_name: str, extracts: list[dict]):
     rows = table.rows
     if len(rows) < 2:
         raise ValueError(f"{template.name}: the table needs a header row and a 'Data subject' row")
+    block = flat_extracts(extracts)
     if generic:
         model = copy.deepcopy(rows[1]._tr)
         for r in list(rows)[2:]:
             r._tr.getparent().remove(r._tr)
         _set_cell(table.rows[1].cells[1], subject_name)
-        for n, e in enumerate(extracts, start=1):
-            table._tbl.append(copy.deepcopy(model))
-            row = table.rows[-1]
-            _set_cell(row.cells[0], f"Extracted data {n}:")
-            _set_cell(row.cells[1], e["text"])
-        return doc
+        if not extracts:
+            return doc, None
+        table._tbl.append(copy.deepcopy(model))
+        row = table.rows[-1]
+        _set_cell(row.cells[0], "Extracted data:")
+        _set_cell(row.cells[1], block)
+        return doc, len(table.rows) - 1
     subject_row = rows[1]
     value = subject_row.cells[1].text.strip()
     if subject_name and (not value or _PLACEHOLDER.fullmatch(value)):
         _set_cell(subject_row.cells[1], subject_name)
-    anchor = next((r for r in list(rows)[1:] if _ANCHOR.search(r.cells[0].text)), rows[-1])
-    if extracts and _PLACEHOLDER.fullmatch(anchor.cells[1].text.strip()):
-        _set_cell(anchor.cells[1], f"See Extract 1{f' to Extract {len(extracts)}' if len(extracts) > 1 else ''} below.")
-    model, after = copy.deepcopy(anchor._tr), anchor._tr
-    for n, e in enumerate(extracts, start=1):
-        tr = copy.deepcopy(model)
-        after.addnext(tr)
-        after = tr
-        from docx.table import _Row
-        row = _Row(tr, table)
-        _set_cell(row.cells[0], f"Extract {n}:")
-        _set_cell(row.cells[1], e["text"])
-    return doc
+    idx = next((i for i, r in enumerate(rows) if i and _ANCHOR.search(r.cells[0].text)), len(rows) - 1)
+    anchor = table.rows[idx]
+    if extracts:
+        current = anchor.cells[1].text.strip()
+        _set_cell(anchor.cells[1], block if not current or _PLACEHOLDER.fullmatch(current) else current + "\n\n" + block)
+    return doc, idx
 
 
-def placeholders(doc) -> list[str]:
-    """[Bracketed] text left in the document for the operator to complete."""
+_HEADER_LINE = re.compile(r"^(From|To|Cc|Bcc|Sent|Date|Subject):", re.M)
+_EXTRACT_LABEL = re.compile(r"Extract(?:ed data)? (\d+):")
+
+
+def has_headers(text: str) -> bool:
+    """Email header lines in an extract: they usually name other people and need narrowing."""
+    return bool(_HEADER_LINE.search(text))
+
+
+def preview(template: Path, subject_name: str, extracts: list[dict]) -> dict:
+    """The report as it would be built now: intro paragraphs and table rows, from the same fill as build()."""
+    doc, ai = _fill(template, subject_name, extracts)
+    intro = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+    rows = []
+    for i, row in enumerate(doc.tables[0].rows):
+        label, value = row.cells[0].text.strip(), row.cells[1].text.strip() if len(row.cells) > 1 else ""
+        if i == 0:
+            kind = "header"
+        elif i == ai and extracts:
+            kind = "extracts"
+        elif _PLACEHOLDER.search(value):
+            kind = "placeholder"
+        else:
+            kind = "field"
+        rows.append({"label": label, "value": value, "kind": kind,
+                     "extracts": [{**e, "shown": report_text(e["text"])} for e in extracts] if kind == "extracts" else None})
+    return {"intro": intro, "rows": rows, "placeholders": placeholders(doc, ai)}
+
+
+def placeholders(doc, extracts_row: int | None = None) -> list[str]:
+    """[Bracketed] text left in the document for the operator to complete (never inside the extracts)."""
     texts = [p.text for p in doc.paragraphs]
-    for t in doc.tables:
-        for row in t.rows:
-            if re.match(r"Extract(ed data)? \d+:", row.cells[0].text.strip()):
+    for ti, t in enumerate(doc.tables):
+        for ri, row in enumerate(t.rows):
+            if ti == 0 and ri == extracts_row:
                 continue        # extract text is the source's own, brackets and all
             texts += [c.text for c in row.cells]
     return list(dict.fromkeys(m for t in texts for m in _PLACEHOLDER.findall(t)))
 
 
 def build_docx(template: Path, subject_name: str, extracts: list[dict], draft_note: str = "") -> bytes:
-    doc = _fill(template, subject_name, extracts)
+    doc, _ = _fill(template, subject_name, extracts)
     if draft_note:
         first = doc.paragraphs[0]
         para = first.insert_paragraph_before()
@@ -276,7 +427,7 @@ def build(conn, output_dir: Path, case_ref: str, subject_name: str, folders: dic
         raise FileNotFoundError(f"Template not found: {template}. Put '{TEMPLATE_NAME}' there or set DSAR_TEMPLATES_DIR.")
     data = assemble(conn, folders)
     n_out = len(data["outstanding"])
-    left = placeholders(_fill(template, subject_name, data["extracts"]))
+    left = placeholders(*_fill(template, subject_name, data["extracts"]))
     draft = n_out > 0 or not subject_name or bool(left)
     note = ""
     if draft:
@@ -304,7 +455,8 @@ def build(conn, output_dir: Path, case_ref: str, subject_name: str, folders: dic
     result = {"report": str(report_path), "register": str(register_path), "draft": draft,
               "extracts": len(data["extracts"]), "from_review": data["from_review"],
               "from_redaction": data["from_redaction"], "outstanding": n_out,
-              "whole_passages_from_workbook": len(data["review"]["whole_from_workbook"]),
+              "workbook_disclose_awaiting_passages": len(data["review"]["whole_from_workbook"]),
+              "conflicts_held_out": sum(1 for o in data["outstanding"] if o["why"].startswith("conflict")),
               "decisions": data["review"]["decisions"], "redaction_folders": data["folders"],
               "excluded_folders": data["excluded_folders"],
               "sha256": {report_path.name: audit.sha256_file(report_path),
