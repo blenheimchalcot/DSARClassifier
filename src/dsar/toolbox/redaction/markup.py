@@ -857,7 +857,7 @@ details.more .menu button{display:block;width:100%;text-align:left;border:0;back
 const PAGE_FID=(location.pathname.match(/\/f\/([0-9a-f]+)\//)||[])[1]||"",TOKEN=new URLSearchParams(location.search).get("token")||(document.querySelector('meta[name="csrf"]')||{}).content,REASONS=__REASONS__,SUBJECT=(new URLSearchParams(location.search).get("subject")||"").toLowerCase();
 const COLOURS=["#2f5d8a","#2e7d4f","#8a4b9c","#b5651d","#1f7a8c"];
 const LABEL={release:"Extracted",redact_full:"Left out",redact_partial:"Extracted in part",pending:"Not reviewed"};
-let DOCS=[],cur=0,view="original",q="",edit=null,full=null,split=null,minScore=-1,focus=null,lastReason=REASONS[0],doneOpen=false,openRow=null,REP={},CONF=[],GROUPS=[],EXPAND=new Set(),repOpen=false,lowOpen=false,MODE="review",DISMISS=new Set(),F={rs:new Set(),ls:new Set(),dd:new Set(),ir:new Set(),hw:new Set(),rr:"",sb:""};
+let DOCS=[],cur=0,view="original",q="",edit=null,full=null,split=null,minScore=-1,focus=null,lastReason=REASONS[0],doneOpen=false,openRow=null,REP={},CONF=[],GROUPS=[],EXPAND=new Set(),repOpen=false,lowOpen=false,MODE="review",DISMISS=new Set(),F={rs:new Set(),ls:new Set(),dd:new Set(),ir:new Set(),hw:new Set(),fd:new Set(),rr:"",sb:""};
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const reasonOpts=()=>REASONS.map(x=>`<option>${esc(x)}</option>`).join("");
 function toast(m){const t=document.getElementById("toast");t.textContent=m;t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",3000)}
@@ -1020,6 +1020,9 @@ function renderConflicts(m){
 function renderSection(){const m=document.getElementById("main"),who=[];if(MODE==="conflicts")return renderConflicts(m);
  let items=pool(MODE);
  let h=`<div class="bar"><b style="font-size:16px">${SECTIONS[MODE]}</b><span class="t">across ${DOCS.length} file(s) in ${new Set(DOCS.map(d=>d.fid||"")).size} folder(s)</span><input type="search" id="q" placeholder="Search…" value="${esc(q)}"></div>`;
+ const fname=d=>(d.folder||"").split(" › ").pop();
+ {const fv=[...new Set(pool(MODE).map(x=>fname(x.d)))].filter(Boolean).sort();if(fv.length>1){h+=`<div class="chips"><span class="t">Folder</span>${fv.map(v=>`<button class="chip ${F.fd.has(v)?"on":""}" data-chip="fd" data-v="${esc(v)}">${esc(v)} (${pool(MODE).filter(x=>fname(x.d)===v).length})</button>`).join("")}<button class="chip clear" data-chip="fd" data-v="*">all</button></div>`}
+  if(F.fd.size)items=items.filter(x=>F.fd.has(fname(x.d)))}
  const qq=q.toLowerCase(),txt=x=>x.el.parts.map(([a,b])=>x.d.text.slice(a,b)).join(" ");
  if(qq)items=items.filter(x=>txt(x).toLowerCase().includes(qq)||x.d.name.toLowerCase().includes(qq));
  if(MODE==="review"){const vals=[...new Set(pool("review").map(x=>sc(x.el)===null?"none":String(sc(x.el))))].sort();h+=chipRow("rs",vals,F.rs,"Model score");if(F.rs.size)items=items.filter(x=>F.rs.has(sc(x.el)===null?"none":String(sc(x.el))))}
