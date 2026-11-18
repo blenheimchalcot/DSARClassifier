@@ -1022,10 +1022,12 @@ function renderSection(){const m=document.getElementById("main"),who=[];if(MODE=
  const byF={};for(const x of items){const n=x.d.fname||"this folder";byF[n]=byF[n]||{items:new Set(),n:0};byF[n].items.add(rk(x.d));byF[n].n++}
  const nItems=new Set(items.map(x=>rk(x.d))).size;
  let h=`<div class="scope"><b>${SECTIONS[MODE]}: ${items.length} paragraph(s) in ${nItems} item(s)</b>${Object.keys(byF).length?" — "+Object.entries(byF).map(([k,v])=>`${esc(k)}: ${v.items.size} item(s), ${v.n} paragraph(s)`).join(" · "):""}</div>
- <div class="bar"><b style="font-size:16px">${SECTIONS[MODE]}</b><span class="t">everything in this review, across all folders</span><input type="search" id="q" placeholder="Search…" value="${esc(q)}"></div>`;
+ <div class="bar"><b style="font-size:16px">${SECTIONS[MODE]}</b><span class="t">${MODE==="review"?"highest score first · ":""}everything in this review, across all folders</span><input type="search" id="q" placeholder="Search…" value="${esc(q)}"></div>`;
  const fname=d=>(d.folder||"").split(" › ").pop();
  {const fv=[...new Set(pool(MODE).map(x=>fname(x.d)))].filter(Boolean).sort();if(fv.length>1){h+=`<div class="chips"><span class="t">Folder</span>${fv.map(v=>`<button class="chip ${F.fd.has(v)?"on":""}" data-chip="fd" data-v="${esc(v)}">${esc(v)} (${pool(MODE).filter(x=>fname(x.d)===v).length})</button>`).join("")}<button class="chip clear" data-chip="fd" data-v="*">all</button></div>`}
   if(F.fd.size)items=items.filter(x=>F.fd.has(fname(x.d)))}
+ // Highest scores first (paragraph score, then the item's own score); unscored last, document order within.
+ if(MODE==="review"||MODE==="low"){const k=x=>[sc(x.el)??-1,(x.d.item&&x.d.item.score)??-1];items.sort((a,b)=>{const A=k(a),B=k(b);return B[0]-A[0]||B[1]-A[1]})}
  const qq=q.toLowerCase(),txt=x=>x.el.parts.map(([a,b])=>x.d.text.slice(a,b)).join(" ");
  if(qq)items=items.filter(x=>txt(x).toLowerCase().includes(qq)||x.d.name.toLowerCase().includes(qq));
  if(MODE==="review"){const vals=[...new Set(pool("review").map(x=>sc(x.el)===null?"none":String(sc(x.el))))].sort();h+=chipRow("rs",vals,F.rs,"Model score");if(F.rs.size)items=items.filter(x=>F.rs.has(sc(x.el)===null?"none":String(sc(x.el))))}
