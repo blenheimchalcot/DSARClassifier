@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.1 (unreleased)
+## 0.3.1 (2026-11-18)
 
 ### Changed
 - **Personal Data Report: extracts as one flat, unnumbered block** in the extracts row (no *Extract N* rows); markdown `**` removed from the report text. The register keeps numbers and exact text.
