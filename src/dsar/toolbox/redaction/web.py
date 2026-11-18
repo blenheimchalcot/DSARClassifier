@@ -93,7 +93,88 @@ def index():
     live = [r for r in rows if not r["left_out"]]
     n_conf = len(markup.conflicts([(fid, docs) for fid, (path, docs) in loaded.items() if str(path) not in skip]))
     total = {k: sum(r["sections"][k] for r in live) for k in ("review", "low", "repeats", "done")} if live else None
-    return render_template("redaction/index.html", rows=rows, total=total, n_conf=n_conf, error=request.args.get("error", ""))
+    return render_template("redaction/index.html", rows=rows, total=total, n_conf=n_conf, intake=_intake_counts(),
+                           error=request.args.get("error", ""))
+
+
+def _intake_counts() -> dict:
+    """Unreviewed classified items by score, from the request's review database (read only)."""
+    s = current_app.config["DSAR"]
+    if not s.case_bound:
+        return {}
+    import sqlite3
+
+    from dsar import disclosure
+    from dsar.webapp import cases
+    db_path = cases.family(s).review_dir / "dsar.sqlite"
+    if not db_path.is_file():
+        return {}
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        return {k: len(v) for k, v in disclosure.intake(conn).items()}
+    except sqlite3.OperationalError:
+        return {}
+    finally:
+        conn.close()
+
+
+@bp.route("/intake", methods=["POST"])
+def intake():
+    """Bring unreviewed classified items into review as a new folder (one file per item, exact text)."""
+    from dsar import db, disclosure, personal_data_report
+    from dsar.webapp import cases
+    s = current_app.config["DSAR"]
+    if not s.case_bound:
+        abort(404)
+    fam = cases.family(s)
+    try:
+        score = int(request.form.get("score", ""))
+    except ValueError:
+        abort(400)
+    with db.connect(fam.review_dir / "dsar.sqlite") as conn:
+        db.init_schema(conn)
+        ids = disclosure.intake(conn).get(score, [])
+        if not ids:
+            return redirect(url_for(".index", error=f"No unreviewed items scored {score}."))
+        result = personal_data_report.send_to_reviewer(conn, fam.review_output, ids, records.reviewer(),
+                                                       min_score=0 if score < markup.REVIEW_MIN_SCORE else None,
+                                                       label=f"score{score}")
+    entry = {**result, "files": len(result["files"]), "chunk_ids": ids, "intake_score": score, "request": fam.main_ref}
+    for out in fam.logs(s.output_dir):
+        audit.AuditLog(out).append("review", "review intake", entry)
+    return redirect(url_for(".page", fid=_fid(Path(result["folder"])), section="review"))
+
+
+@bp.route("/f/<fid>/api/decide-file", methods=["POST"])
+def decide_file(fid):
+    """Decide every undecided element of one file at once: the whole item extracted, or left out with a reason."""
+    f = _folder(fid)
+    body = request.get_json(silent=True) or {}
+    doc = next((d for d in f.docs() if d["name"] == body.get("file")), None)
+    if doc is None:
+        abort(404)
+    decision = body.get("decision")
+    if decision not in ("release", "redact_full"):
+        return jsonify({"error": "unknown decision"}), 400
+    done = 0
+    for el in doc["elements"]:
+        if el["id"] in doc["decisions"] or el.get("blank"):
+            continue
+        try:
+            f.act({"file": doc["name"], "sha256": doc["sha256"], "action": "decide", "element": el["id"],
+                   "decision": decision, "reason": body.get("reason"), "note": "Whole item decided at once"})
+            done += 1
+        except ValueError as exc:
+            return jsonify({"error": str(exc), "decided": done}), 400
+    data = {"folder": str(f.folder), "file": doc["name"], "file_sha256": doc["sha256"], "decision": decision,
+            "reason": body.get("reason"), "elements": done}
+    records.log(TOOL, "decide-file", data)
+    owner = _owner(f.folder)
+    s = current_app.config["DSAR"]
+    if owner is not None and owner != s.output_dir:
+        audit.AuditLog(owner).append("toolbox", f"toolbox {TOOL} decide-file", {"reviewer": records.reviewer(), **data})
+    return jsonify({"decided": done})
 
 
 @bp.route("/add", methods=["POST"])

@@ -15,10 +15,10 @@
     {% if settings.case_bound %}<a href="{{ url_for('main.cases_page') }}" class="{{ 'on' if request.endpoint == 'main.cases_page' }}">Cases</a>{% endif %}
     <a href="{{ url_for('main.home') }}" class="{{ 'on' if request.endpoint == 'main.home' }}">{% if settings.case_bound %}Current case: <b>{{ settings.case_ref }}</b>{% else %}Home{% endif %}</a>
     {% if settings.case_bound %}
-    <a href="{{ url_for('review.queue') }}" class="{{ 'on' if request.endpoint in ('review.queue', 'review.item') }}">Review</a>
+    <a href="{{ url_for('tool_redaction.index') }}" class="{{ 'on' if request.blueprint == 'tool_redaction' }}">Personal Data Reviewer</a>
     <a href="{{ url_for('review.report_page') }}" class="{{ 'on' if request.endpoint == 'review.report_page' }}">Report</a>{% endif %}
     <a href="{{ url_for('main.toolbox_index') }}" class="{{ 'on' if request.endpoint == 'main.toolbox_index' }}">Toolbox</a>
-    {% for t in tools %}
+    {% for t in tools if t.key != "redaction" or not settings.case_bound %}
     <a href="{{ url_for(t.endpoint) }}" class="{{ 'on' if request.blueprint == t.blueprint_name }}">{{ t.name }}</a>
     {% endfor %}
   </nav>

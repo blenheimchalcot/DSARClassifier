@@ -3,6 +3,7 @@
 ## 0.3.1 (unreleased)
 
 ### Changed
+- **One review page:** the Personal Data Reviewer replaces Review in the top bar. Unreviewed classified items are brought in by score (`review intake`), items below 7 showing every paragraph, and every file has whole-item Extract / Leave out. Repeats group identical text (*Confirm all*).
 - **Context** button on every element in the Personal Data Reviewer and on the Review page: the whole document, the whole original item, and the conversation (email thread or chat) around it, oldest first.
 - Repeats show your earlier decision first, then the repeat to decide.
 - **Personal Data Reviewer sections**, across every file in a folder: **To review (7+)** (filter by score), **6 and below** (filter by score; extract one if it should be in), **Repeats** (each beside the element it matches, with *Confirm match*, *Not a match* and *Confirm all*), and **Reviewed** (filter by decision, in the report or not, by hand or copied, reason, score band). *By file* keeps the per-file view. Each element carries its file, so decisions go to the right file and hash.

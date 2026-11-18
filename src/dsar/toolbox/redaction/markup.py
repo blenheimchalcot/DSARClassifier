@@ -173,12 +173,22 @@ def redacted_text(text: str, start: int, end: int, redactions: list[dict]) -> li
     return pieces
 
 
+SETTINGS_NAME = "review_settings.json"   # per folder: {"min_score": N}, the paragraph review threshold
+
+
 class Folder:
     def __init__(self, folder: Path, reviewer: str, case_output: Path | None):
         self.folder = Path(folder)
         self.reviewer = reviewer
         self.case_output = case_output
         self.events = Events(self.folder)
+        self.min_score = REVIEW_MIN_SCORE
+        s = self.folder / SETTINGS_NAME
+        if s.is_file():
+            try:
+                self.min_score = int(json.loads(s.read_text(encoding="utf-8")).get("min_score", REVIEW_MIN_SCORE))
+            except (ValueError, TypeError):
+                pass
 
     def files(self) -> list[Path]:
         return sorted(p for p in self.folder.glob("*.txt") if p.is_file())
@@ -245,7 +255,7 @@ class Folder:
             for el in doc["elements"]:
                 el["score"] = scores.get((p.name, sha, json.dumps(el["parts"])))
                 el["blank"] = is_blank(text, el)
-                el["below"] = below_threshold(el)
+                el["below"] = below_threshold(el, self.min_score)
             out.append({"name": p.name, "sha256": sha, "text": text, **doc, "stale": other})
         return out
 
@@ -396,11 +406,11 @@ def is_blank(text: str, el: dict) -> bool:
 REVIEW_MIN_SCORE = 7          # operator instruction 2026-11-17: only elements the model scores 7+ are reviewed
 
 
-def below_threshold(el: dict) -> bool:
+def below_threshold(el: dict, min_score: int = REVIEW_MIN_SCORE) -> bool:
     """Scored by the model, below the review threshold: needs no decision and stays out of the report.
     An element not yet scored (or the model gave no number) still needs a decision."""
     s = el.get("score") or {}
-    return s.get("score") is not None and s["score"] < REVIEW_MIN_SCORE
+    return s.get("score") is not None and s["score"] < min_score
 
 
 def section_counts(docs: list[dict], repeats: dict[str, dict]) -> dict[str, int]:
@@ -819,7 +829,7 @@ main{padding:0 32px 64px;max-width:940px;width:100%}
 .why{font-size:11px;font-weight:600;color:var(--red);text-decoration:none;margin:0 4px;white-space:nowrap}
 .mark{background:var(--redbg);color:var(--red);text-decoration:line-through;cursor:pointer;border-radius:2px;outline:1px dashed var(--red)}
 .blk{background:#000;color:#fff;font-size:12px;padding:1px 6px;border-radius:2px;white-space:nowrap}
-.itemscore{background:var(--bg);border-left:3px solid var(--part,#c80);border-radius:6px;padding:8px 12px;margin:0 0 10px;font-size:14px}.itemscore .ev{font-size:12px;opacity:.75;margin-top:4px}.sect{display:flex;justify-content:space-between;align-items:center;width:100%;font-weight:600}.sect .cnt{font-weight:600;background:var(--bg);border-radius:99px;padding:0 8px;font-size:12px}.sect.on .cnt{color:var(--ink,#1d1d1b);background:#fff}.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0}.chip{border:1px solid var(--line);background:var(--panel);border-radius:99px;padding:2px 10px;font:inherit;font-size:12px;cursor:pointer}.chip.on{background:var(--accent,#2f5d8a);color:#fff;border-color:transparent}.chip.clear{opacity:.7}.filehead{margin:16px 0 6px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}.pair{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:start;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0;background:var(--panel)}.pair .ptxt{white-space:pre-wrap;font-size:14px;margin-top:4px}.pair .pbtn{display:flex;flex-direction:column;gap:6px;max-width:240px;font-size:13px}.pair .own{display:flex;flex-direction:column;gap:4px}.pair .own .btn{font-size:13px;padding:3px 8px}.el.pair{display:grid}.pair .ph{font-weight:600;font-size:13px;display:flex;gap:8px;align-items:center;margin-bottom:4px}.pair .side{padding:8px;border-radius:6px}.pair .side.now{background:var(--bg)}.grpn{background:#fff1b8;color:#7a5200;border-radius:99px;padding:0 8px;font-size:12px}.pair.conf .side.now{background:#fbe3e1;border-left:3px solid var(--red,#b3261e)}.pair .win{background:#d9f2e0;border-radius:2px}.pair .wout{text-decoration:line-through;color:var(--red,#b3261e);background:#fbe3e1}.pair .why{font-size:11px;color:var(--red,#b3261e);margin:0 4px}.pair .side.was{background:var(--okbg,#e6f4ea);border-left:3px solid var(--ok,#2e7d4f)}.ctx{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:50;display:flex;align-items:center;justify-content:center}.ctx[hidden]{display:none}.ctxbox{background:var(--panel,#fff);color:var(--ink,#1d1d1b);width:min(1000px,94vw);height:88vh;border-radius:10px;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,.3)}.ctxhead{display:flex;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}.ctxbody{overflow:auto;padding:12px 16px;flex:1}.ctxt{white-space:pre-wrap;font-size:14px;line-height:1.5}.ctxt mark,.ctx mark{background:#ffe58a;padding:0 1px}.ctxc{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:8px 0}.ctxc.here{border:2px solid #c80;background:#fff8e1}.ctxm{font-size:12px;color:var(--muted);margin-bottom:4px}.ctxb{margin-left:6px;font-size:11px;padding:1px 7px}.form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;font-size:13px}.form.top{justify-content:flex-end;margin:8px 0 10px}.form.col{flex-direction:column;align-items:flex-end}.form .frow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end}.btn kbd{font:600 10px/1 var(--mono,monospace);border:1px solid currentColor;border-radius:3px;padding:1px 4px;margin-left:4px;opacity:.6}
+.itemscore{background:var(--bg);border-left:3px solid var(--part,#c80);border-radius:6px;padding:8px 12px;margin:0 0 10px;font-size:14px}.itemscore .ev{font-size:12px;opacity:.75;margin-top:4px}.sect{display:flex;justify-content:space-between;align-items:center;width:100%;font-weight:600}.sect .cnt{font-weight:600;background:var(--bg);border-radius:99px;padding:0 8px;font-size:12px}.sect.on .cnt{color:var(--ink,#1d1d1b);background:#fff}.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0}.chip{border:1px solid var(--line);background:var(--panel);border-radius:99px;padding:2px 10px;font:inherit;font-size:12px;cursor:pointer}.chip.on{background:var(--accent,#2f5d8a);color:#fff;border-color:transparent}.chip.clear{opacity:.7}.filehead{margin:16px 0 6px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}.pair{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:start;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0;background:var(--panel)}.pair .ptxt{white-space:pre-wrap;font-size:14px;margin-top:4px}.pair .pbtn{display:flex;flex-direction:column;gap:6px;max-width:240px;font-size:13px}.pair .own{display:flex;flex-direction:column;gap:4px}.pair .own .btn{font-size:13px;padding:3px 8px}.el.pair{display:grid}.pair .ph{font-weight:600;font-size:13px;display:flex;gap:8px;align-items:center;margin-bottom:4px}.pair .side{padding:8px;border-radius:6px}.pair .side.now{background:var(--bg)}.grpn{background:#fff1b8;color:#7a5200;border-radius:99px;padding:0 8px;font-size:12px}.pair.conf .side.now{background:#fbe3e1;border-left:3px solid var(--red,#b3261e)}.pair .win{background:#d9f2e0;border-radius:2px}.pair .wout{text-decoration:line-through;color:var(--red,#b3261e);background:#fbe3e1}.pair .why{font-size:11px;color:var(--red,#b3261e);margin:0 4px}.pair .side.was{background:var(--okbg,#e6f4ea);border-left:3px solid var(--ok,#2e7d4f)}.ctx{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:50;display:flex;align-items:center;justify-content:center}.ctx[hidden]{display:none}.ctxbox{background:var(--panel,#fff);color:var(--ink,#1d1d1b);width:min(1000px,94vw);height:88vh;border-radius:10px;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,.3)}.ctxhead{display:flex;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}.ctxbody{overflow:auto;padding:12px 16px;flex:1}.ctxt{white-space:pre-wrap;font-size:14px;line-height:1.5}.ctxt mark,.ctx mark{background:#ffe58a;padding:0 1px}.ctxc{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:8px 0}.ctxc.here{border:2px solid #c80;background:#fff8e1}.ctxm{font-size:12px;color:var(--muted);margin-bottom:4px}.ctxb{margin-left:6px;font-size:11px;padding:1px 7px}.wibar{margin:0 0 10px}.wi{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;margin-left:10px;text-transform:none;letter-spacing:0;font-weight:400}.filehead .wi .btn{font-size:11px;padding:1px 8px}.form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;font-size:13px}.form.top{justify-content:flex-end;margin:8px 0 10px}.form.col{flex-direction:column;align-items:flex-end}.form .frow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end}.btn kbd{font:600 10px/1 var(--mono,monospace);border:1px solid currentColor;border-radius:3px;padding:1px 4px;margin-left:4px;opacity:.6}
 .form select,.form input{padding:4px 6px;font:inherit;font-size:13px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px}.form input{flex:1;min-width:140px}
 mark{background:#ffe066;color:#000}
 .prior{font-size:13px;background:var(--partbg);color:var(--part);border-radius:6px;padding:4px 10px;margin-top:6px}
@@ -901,6 +911,7 @@ function render(){if(MODE!=="file")return renderSection();const d=DOCS[cur],m=do
   <select id="min" class="btn" title="Show only elements the model scored at or above this"><option value="-1">All scores</option>${[1,5,6,7,8].map(n=>`<option value="${n}" ${minScore===n?"selected":""}>Model score ≥ ${n}</option>`).join("")}</select><button class="btn" id="all">Extract all not yet reviewed</button><button class="btn primary" id="exp">Export redacted copy</button></div>
   <div class="legend"><span><i class="sw" style="background:var(--okbg);border:1px solid var(--ok)"></i>Extracted</span><span><i class="sw" style="background:var(--redbg);border:1px solid var(--red)"></i>Left out</span><span>${n} of ${total} elements reviewed</span><span class="keys"><kbd>E</kbd> extract · <kbd>L</kbd> leave out · <kbd>P</kbd> leave part out · <kbd>↓</kbd><kbd>↑</kbd> move · <kbd>Enter</kbd> confirm</span></div>`;
  if(d.item)h+=`<div class="itemscore">Classified as a whole item: <b>model score ${d.item.score??"–"}</b>${d.item.reason?" · "+esc(d.item.reason):""}${d.item.evidence?`<div class="ev">Evidence: “${esc(d.item.evidence)}”</div>`:""}</div>`;
+ h+=wiControls(d,cur)?`<div class="wibar">${wiControls(d,cur)}</div>`:"";
  if(d.stale)h+=`<div class="warn">${d.stale} earlier decision(s) were made on a different version of this file and are not shown.</div>`;
  const cards={},shown=[];
  for(const el of d.elements){if(el.blank&&!d.decisions[el.id])continue;const text=el.parts.map(([a,b])=>d.text.slice(a,b)).join(" ");
@@ -934,7 +945,7 @@ function render(){if(MODE!=="file")return renderSection();const d=DOCS[cur],m=do
  document.getElementById("all").onclick=async()=>{const todo=d.elements.filter(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[rk(d)]||{})[e.id]);if(!todo.length||!confirm(`Extract ${todo.length} element(s) not yet reviewed, as they are?`))return;for(const e of todo)if(!await act({action:"decide",element:e.id,decision:"release"}))break;await load(true)};
  wire(m);
 }
-function wire(m){
+function wire(m){wireWI(m);
  m.querySelectorAll("[data-ctx]").forEach(b=>b.onclick=ev=>{ev.stopPropagation();const [fi,id]=splitKey(b.closest(".el").dataset.el);showContext(DOCS[fi],id)});
  m.querySelectorAll("[data-ctx2]").forEach(b=>b.onclick=ev=>{ev.stopPropagation();ctxFor(b.dataset.ctx2)});
  m.querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const key=b.closest(".el").dataset.el,[fi,id]=splitKey(key),a=b.dataset.a;cur=fi;
@@ -963,7 +974,7 @@ function undecidedKey(k){const [fi,id]=splitKey(k);return !DOCS[fi].decisions[id
 // ---- Section views: every file of the folder at once -------------------------------------------
 // review: undecided, scored 7+ (or not yet scored) | low: undecided, scored below 7
 // repeats: undecided, same text as a decided element | done: every decided element
-const SECTIONS={review:"To review (7+)",low:"6 and below",repeats:"Repeats",conflicts:"Conflicts",done:"Reviewed"};
+const SECTIONS={review:"To review",low:"6 and below",repeats:"Repeats",conflicts:"Conflicts",done:"Reviewed"};
 const DUP="Duplicate – already in the Personal Data Report";
 function di(fid,file){return DOCS.findIndex(d=>(d.fid||"")===(fid||"")&&d.name===file)}
 function sc(el){const s=el.score;return s&&s.score!=null?s.score:null}
@@ -1033,7 +1044,7 @@ function renderSection(){const m=document.getElementById("main"),who=[];if(MODE=
    if(g.xs.length>1)h+=`<div class="filehead">${g.xs.length} copies of the same text <button class="btn sm" data-expand="${esc(g.k)}">Group them again</button></div>`;
    for(const x of g.xs){const key=x.fi+"|"+x.el.id;h+=(openRow===key||full===key||edit?.el===key)?cardHTML(x.d,x.el,key,who):pairHTML(x,key,null)}}}
  else for(const x of items.slice(0,300)){const key=x.fi+"|"+x.el.id;
-  if(rk(x.d)!==last){h+=`<div class="filehead">${x.d.folder?esc(x.d.folder)+" › ":""}${esc(x.d.name.replace(/\.txt$/,"").replace(/_/g," "))}${x.d.item&&x.d.item.score!=null?` · item score ${x.d.item.score}`:""}</div>`;last=rk(x.d)}
+  if(rk(x.d)!==last){h+=`<div class="filehead">${x.d.folder?esc(x.d.folder)+" › ":""}${esc(x.d.name.replace(/\.txt$/,"").replace(/_/g," "))}${x.d.item&&x.d.item.score!=null?` · item score ${x.d.item.score}`:""}${MODE!=="done"?wiControls(x.d,x.fi):""}</div>`;last=rk(x.d)}
 
   if(MODE==="done"&&openRow!==key&&focus!==key){h+=row(x.d,x.el).replace(`data-row="${x.el.id}"`,`data-row="${key}"`).replace("</div>",`${x.dec.copied_from?`<span class="t">copied from ${esc(x.dec.copied_from.split("#")[0])}</span>`:""}</div>`);continue}
   h+=cardHTML(x.d,x.el,key,who)}
@@ -1076,6 +1087,17 @@ async function showContext(d,elId){if(!d)return;let box=document.getElementById(
  box.querySelectorAll("[data-tab]").forEach(x=>x.onclick=()=>ctxRender(x.dataset.tab));ctxRender("doc")}
 function closeContext(){const b=document.getElementById("ctx");if(b)b.hidden=true;CTX=null}
 function ctxFor(spec){const [fid,file,el]=spec.split("|");let i=di(fid,file);if(i<0)i=DOCS.findIndex(d=>d.name===file&&(!fid||(d.folder||"").endsWith(fid)));if(i<0)i=DOCS.findIndex(d=>d.name===file);if(i>=0)showContext(DOCS[i],el)}
+
+// ---- Whole-item decisions ---------------------------------------------------------------------
+const NOT_REQ="Not the requester's personal data";
+function undecidedOf(d){return d.elements.filter(e=>!d.decisions[e.id]&&!e.blank)}
+function wiControls(d,fi){const n=undecidedOf(d).length;if(!n)return "";
+ return `<span class="wi" data-wfi="${fi}"><span class="t">Whole item (${n} undecided):</span><button class="btn sm" data-wi="release">Extract whole item</button><select class="btn sm" data-wr>${REASONS.map(x=>`<option ${x===NOT_REQ?"selected":""}>${esc(x)}</option>`).join("")}</select><button class="btn sm stop" data-wi="redact_full">Leave out whole item</button></span>`}
+async function decideFile(fi,decision,reason){const d=DOCS[fi],n=undecidedOf(d).length;
+ if(!confirm(decision==="release"?`Extract all ${n} undecided paragraph(s) of this item into the report?`:`Leave out all ${n} undecided paragraph(s) of this item as “${reason}”?`))return;
+ const r=await fetch(fbase(d)+"api/decide-file",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify({file:d.name,decision,reason})});
+ const j=await r.json();if(!r.ok){toast(j.error||"Not saved");return}toast(`Recorded ${j.decided} decision(s)`);await load(true);nav()}
+function wireWI(m){m.querySelectorAll("[data-wi]").forEach(b=>b.onclick=()=>{const w=b.closest("[data-wfi]");decideFile(+w.dataset.wfi,b.dataset.wi,w.querySelector("[data-wr]").value)})}
 function visibleIds(){return [...document.querySelectorAll("#main .el")].map(x=>x.dataset.el)}
 function goTo(id){if(!id)return;focus=id;document.querySelectorAll(".el.focus").forEach(y=>y.classList.remove("focus"));const x=document.querySelector(`.el[data-el="${id}"]`);if(x){x.classList.add("focus");x.scrollIntoView({block:"center",behavior:"smooth"})}}
 // After a decision, move to the next element not yet reviewed (in the current view and filter).

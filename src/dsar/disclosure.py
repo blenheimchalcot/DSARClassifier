@@ -244,6 +244,16 @@ def find_chunk(conn: sqlite3.Connection, text: str, document: str = "") -> str |
     return None
 
 
+def intake(conn: sqlite3.Connection) -> dict[int, list[str]]:
+    """Classified items with no decision yet, by model score (5 and above): what can be brought into review."""
+    decided = latest(conn)
+    out: dict[int, list[str]] = {}
+    for r in conn.execute(QUEUE_SQL):
+        if r["score"] is not None and r["score"] >= 5 and r["chunk_id"] not in decided:
+            out.setdefault(r["score"], []).append(r["chunk_id"])
+    return dict(sorted(out.items(), reverse=True))
+
+
 def latest_for(conn: sqlite3.Connection, chunk_id: str) -> dict | None:
     hist = history(conn, chunk_id)
     return hist[-1] if hist else None

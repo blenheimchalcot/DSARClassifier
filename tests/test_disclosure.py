@@ -478,3 +478,32 @@ def test_context_shows_the_whole_item_and_its_thread(case):
     assert "Whole item" in c.get("/review/item/a").get_data(as_text=True)
     with db.connect(case / "dsar.sqlite") as conn:
         assert disclosure.find_chunk(conn, "Sam Sample's new address is 1 Example Road.") == "a"
+
+
+def test_unreviewed_items_are_brought_into_the_personal_data_reviewer(case, template):
+    from dsar.toolbox.redaction import markup, web
+
+    with db.connect(case / "dsar.sqlite") as conn:
+        conn.execute("UPDATE classifications SET score = 6 WHERE chunk_id = 'c'")
+        assert disclosure.intake(conn) == {9: ["b"], 8: ["d"], 7: ["a"], 6: ["c"]}
+    app, c = client_for(webapp.Settings.for_case(case))
+    page = c.get("/toolbox/redaction/").get_data(as_text=True)
+    assert "Bring 1 item(s) scored 6 into review" in page and 'href="/toolbox/redaction/"' in c.get("/").get_data(as_text=True)
+    r = c.post("/toolbox/redaction/intake", data={"csrf": c.csrf, "score": "6"})
+    assert "section=review" in r.headers["Location"]
+    folder = next((case / "output").glob(personal_data_report.STACK_PREFIX + "*_score6"))
+    f = markup.Folder(folder, "Test Reviewer", None)
+    assert f.min_score == 0                                       # items below 7: every paragraph is shown
+    with db.connect(case / "dsar.sqlite") as conn:
+        assert disclosure.latest(conn)["c"]["decision"] == disclosure.IN_REVIEWER
+        assert 6 not in disclosure.intake(conn)
+    assert audit.AuditLog(case / "output").entries()[-1]["command"] == "review intake"
+    # Whole item: leave out every paragraph at once.
+    with app.test_request_context():
+        fid = next(k for k, p in web.folders().items() if p == folder)
+    name = f.docs()[0]["name"]
+    r = c.post(f"/toolbox/redaction/f/{fid}/api/decide-file", json={"file": name, "decision": "redact_full",
+                                                                  "reason": "Not the requester's personal data"},
+               headers={"X-CSRF": c.csrf})
+    assert r.get_json()["decided"] == len(f.docs()[0]["elements"])
+    assert markup.undecided_count(markup.Folder(folder, "", None).docs()[0]) == 0

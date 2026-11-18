@@ -75,7 +75,8 @@ def _slug(text: str, n: int = 50) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "-", text).strip("-")[:n] or "item"
 
 
-def send_to_reviewer(conn, output_dir: Path, chunk_ids: list[str], reviewer: str) -> dict:
+def send_to_reviewer(conn, output_dir: Path, chunk_ids: list[str], reviewer: str, min_score: int | None = None,
+                     label: str = "") -> dict:
     """Write these items into a new review stack folder for the Personal Data Reviewer.
 
     Each file is the item's text exactly (its SHA-256 equals the decision's content
@@ -88,8 +89,12 @@ def send_to_reviewer(conn, output_dir: Path, chunk_ids: list[str], reviewer: str
 
     if not reviewer:
         raise ValueError("sign in first")
-    folder = Path(output_dir) / (STACK_PREFIX + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+    folder = Path(output_dir) / (STACK_PREFIX + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + (f"_{label}" if label else ""))
     folder.mkdir(parents=True, exist_ok=False)
+    if min_score is not None:
+        # Items brought in below 7 show every paragraph (their own score is already below the line).
+        from dsar.toolbox.redaction import markup
+        (folder / markup.SETTINGS_NAME).write_text(json.dumps({"min_score": min_score}), encoding="utf-8")
     latest = disclosure.latest(conn)
     index, written = {}, []
     for n, cid in enumerate(dict.fromkeys(chunk_ids), start=1):
@@ -115,7 +120,7 @@ def send_to_reviewer(conn, output_dir: Path, chunk_ids: list[str], reviewer: str
         written.append(name)
     (folder / STACK_INDEX).write_text(json.dumps(index, indent=1), encoding="utf-8")
     conn.commit()
-    return {"folder": str(folder), "items": len(written), "files": written,
+    return {"folder": str(folder), "items": len(written), "files": written, "paragraph_min_score": min_score,
             "index_sha256": audit.sha256_file(folder / STACK_INDEX), "reviewer": reviewer}
 
 

@@ -125,6 +125,8 @@ Shows each pipeline stage (manifest, attachments, ingest, provenance, ingest QA,
 
 ## Personal Data Reviewer (formerly Redaction)
 
+**One place to review.** The Personal Data Reviewer is the review page (top bar). Its front page lists classified items nobody has reviewed yet, by score; **Bring N item(s) scored S into review** puts them into a new folder (one file per item, its exact text, logged as `review intake`). Items brought in below 7 show every paragraph (the folder's `review_settings.json` sets its paragraph threshold). Each file has **Extract whole item** and **Leave out whole item** (with a reason) for the quick calls. The classic item list (`/review/`) remains for reference.
+
 **Sections.** The sidebar's four sections work across every file in **all of the request's folders** (decisions still go to each folder's own log and file hash): **To review (7+)**, **6 and below**, **Repeats** and **Reviewed**, each with filters (score; decision, inclusion, by hand or copied, reason). *By file* opens one file as before. Decisions work the same everywhere (E / L / P).
 In **Repeats**, each repeat (left, with its model score) sits beside **your earlier decision** (right): who, when, the decision and reasons, its model score, and the element as decided, with extracted text highlighted and left-out text struck through. The repeat shows the cuts a confirm would apply. **Confirm match** records the same outcome; **Not a match** sends it back to be reviewed; or decide it yourself with Extract / Leave out / Leave part out.
 
