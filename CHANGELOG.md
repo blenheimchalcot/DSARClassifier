@@ -3,6 +3,7 @@
 ## 0.3.1 (unreleased)
 
 ### Changed
+- **Personal Data Report: extracts as one flat, unnumbered block** in the extracts row (no *Extract N* rows); markdown `**` removed from the report text. The register keeps numbers and exact text.
 - **One review page:** the Personal Data Reviewer replaces Review in the top bar. Unreviewed classified items are brought in by score (`review intake`), items below 7 showing every paragraph, and every file has whole-item Extract / Leave out. Repeats group identical text (*Confirm all*).
 - **Context** button on every element in the Personal Data Reviewer and on the Review page: the whole document, the whole original item, and the conversation (email thread or chat) around it, oldest first.
 - Repeats show your earlier decision first, then the repeat to decide.

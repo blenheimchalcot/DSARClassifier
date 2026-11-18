@@ -294,7 +294,19 @@ def _set_cell(cell, text: str) -> None:
             run._r.insert(0, copy.deepcopy(run_fmt))
 
 
+def report_text(text: str) -> str:
+    """An extract as it appears in the report: markdown bold markers (**) removed; the words are unchanged.
+    (The private register keeps the exact source text.)"""
+    return text.replace("**", "")
+
+
+def flat_extracts(extracts: list[dict]) -> str:
+    """All extracts as one block of text: one passage after another, a blank line between, no numbering."""
+    return "\n\n".join(report_text(e["text"]) for e in extracts)
+
+
 def _fill(template: Path, subject_name: str, extracts: list[dict]):
+    """Fill the template; returns (document, index of the table row holding the extracts)."""
     import docx
 
     doc = docx.Document(str(template))
@@ -310,34 +322,29 @@ def _fill(template: Path, subject_name: str, extracts: list[dict]):
     rows = table.rows
     if len(rows) < 2:
         raise ValueError(f"{template.name}: the table needs a header row and a 'Data subject' row")
+    block = flat_extracts(extracts)
     if generic:
         model = copy.deepcopy(rows[1]._tr)
         for r in list(rows)[2:]:
             r._tr.getparent().remove(r._tr)
         _set_cell(table.rows[1].cells[1], subject_name)
-        for n, e in enumerate(extracts, start=1):
-            table._tbl.append(copy.deepcopy(model))
-            row = table.rows[-1]
-            _set_cell(row.cells[0], f"Extracted data {n}:")
-            _set_cell(row.cells[1], e["text"])
-        return doc
+        if not extracts:
+            return doc, None
+        table._tbl.append(copy.deepcopy(model))
+        row = table.rows[-1]
+        _set_cell(row.cells[0], "Extracted data:")
+        _set_cell(row.cells[1], block)
+        return doc, len(table.rows) - 1
     subject_row = rows[1]
     value = subject_row.cells[1].text.strip()
     if subject_name and (not value or _PLACEHOLDER.fullmatch(value)):
         _set_cell(subject_row.cells[1], subject_name)
-    anchor = next((r for r in list(rows)[1:] if _ANCHOR.search(r.cells[0].text)), rows[-1])
-    if extracts and _PLACEHOLDER.fullmatch(anchor.cells[1].text.strip()):
-        _set_cell(anchor.cells[1], f"See Extract 1{f' to Extract {len(extracts)}' if len(extracts) > 1 else ''} below.")
-    model, after = copy.deepcopy(anchor._tr), anchor._tr
-    for n, e in enumerate(extracts, start=1):
-        tr = copy.deepcopy(model)
-        after.addnext(tr)
-        after = tr
-        from docx.table import _Row
-        row = _Row(tr, table)
-        _set_cell(row.cells[0], f"Extract {n}:")
-        _set_cell(row.cells[1], e["text"])
-    return doc
+    idx = next((i for i, r in enumerate(rows) if i and _ANCHOR.search(r.cells[0].text)), len(rows) - 1)
+    anchor = table.rows[idx]
+    if extracts:
+        current = anchor.cells[1].text.strip()
+        _set_cell(anchor.cells[1], block if not current or _PLACEHOLDER.fullmatch(current) else current + "\n\n" + block)
+    return doc, idx
 
 
 _HEADER_LINE = re.compile(r"^(From|To|Cc|Bcc|Sent|Date|Subject):", re.M)
@@ -351,38 +358,37 @@ def has_headers(text: str) -> bool:
 
 def preview(template: Path, subject_name: str, extracts: list[dict]) -> dict:
     """The report as it would be built now: intro paragraphs and table rows, from the same fill as build()."""
-    doc = _fill(template, subject_name, extracts)
+    doc, ai = _fill(template, subject_name, extracts)
     intro = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
     rows = []
     for i, row in enumerate(doc.tables[0].rows):
         label, value = row.cells[0].text.strip(), row.cells[1].text.strip() if len(row.cells) > 1 else ""
-        m = _EXTRACT_LABEL.fullmatch(label)
         if i == 0:
             kind = "header"
-        elif m:
-            kind = "extract"
+        elif i == ai and extracts:
+            kind = "extracts"
         elif _PLACEHOLDER.search(value):
             kind = "placeholder"
         else:
             kind = "field"
         rows.append({"label": label, "value": value, "kind": kind,
-                     "extract": extracts[int(m.group(1)) - 1] if m else None})
-    return {"intro": intro, "rows": rows, "placeholders": placeholders(doc)}
+                     "extracts": [{**e, "shown": report_text(e["text"])} for e in extracts] if kind == "extracts" else None})
+    return {"intro": intro, "rows": rows, "placeholders": placeholders(doc, ai)}
 
 
-def placeholders(doc) -> list[str]:
-    """[Bracketed] text left in the document for the operator to complete."""
+def placeholders(doc, extracts_row: int | None = None) -> list[str]:
+    """[Bracketed] text left in the document for the operator to complete (never inside the extracts)."""
     texts = [p.text for p in doc.paragraphs]
-    for t in doc.tables:
-        for row in t.rows:
-            if re.match(r"Extract(ed data)? \d+:", row.cells[0].text.strip()):
+    for ti, t in enumerate(doc.tables):
+        for ri, row in enumerate(t.rows):
+            if ti == 0 and ri == extracts_row:
                 continue        # extract text is the source's own, brackets and all
             texts += [c.text for c in row.cells]
     return list(dict.fromkeys(m for t in texts for m in _PLACEHOLDER.findall(t)))
 
 
 def build_docx(template: Path, subject_name: str, extracts: list[dict], draft_note: str = "") -> bytes:
-    doc = _fill(template, subject_name, extracts)
+    doc, _ = _fill(template, subject_name, extracts)
     if draft_note:
         first = doc.paragraphs[0]
         para = first.insert_paragraph_before()
@@ -421,7 +427,7 @@ def build(conn, output_dir: Path, case_ref: str, subject_name: str, folders: dic
         raise FileNotFoundError(f"Template not found: {template}. Put '{TEMPLATE_NAME}' there or set DSAR_TEMPLATES_DIR.")
     data = assemble(conn, folders)
     n_out = len(data["outstanding"])
-    left = placeholders(_fill(template, subject_name, data["extracts"]))
+    left = placeholders(*_fill(template, subject_name, data["extracts"]))
     draft = n_out > 0 or not subject_name or bool(left)
     note = ""
     if draft:

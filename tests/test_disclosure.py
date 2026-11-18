@@ -141,10 +141,10 @@ def test_report_merges_review_workbook_and_redaction_extracts_into_the_template(
     assert body.startswith("DRAFT") and "INSERT DATA REPORT" not in body and "SAMPLE TABLE" not in body
     rows = [[cell.text for cell in row.cells] for row in d.tables[0].rows]
     assert rows[1] == ["Data Subject: ", "Sam Sample"]
-    assert [r[0] for r in rows[2:]] == ["Extracted data 1:", "Extracted data 2:", "Extracted data 3:"]
+    # One unnumbered block: every extract, oldest first, a blank line between.
+    assert [r[0] for r in rows[2:]] == ["Extracted data:"]
+    assert rows[2][1] == "\n\n".join([TEXT_B, "Sam Sample starts on Monday.", "Sam Sample's new address is 1 Example Road."])
     # Oldest first, text only: no sender, subject or date in the report.
-    assert rows[2][1] == TEXT_B and rows[3][1] == "Sam Sample starts on Monday."
-    assert rows[4][1] == "Sam Sample's new address is 1 Example Road."
     assert "someone@example.test" not in body + str(rows) and "John Smith" not in str(rows)
     with (out / j["register"]).open() as fh:
         reg = list(csv.DictReader(fh))
@@ -199,10 +199,11 @@ def test_a_case_tailored_template_keeps_its_rows_and_flags_placeholders(case, te
     assert result["draft"] and result["outstanding"] == 1 and result["placeholders_left"] == ["[Insert]"]  # d (score 8) undecided
     out = docx.Document(result["report"])
     rows = [[c.text for c in r.cells] for r in out.tables[0].rows]
-    assert rows[:4] == [["Personal data", "Data held"], ["Data subject:", "Sam Sample"],
-                        ["Email address:", "sam@example.test"],
-                        ["Internal emails that mention you:", "See Extract 1 to Extract 2 below."]]
-    assert [r[0] for r in rows[4:6]] == ["Extract 1:", "Extract 2:"] and rows[6] == ["Recruitment decision:", "[Insert]"]
+    assert rows[:3] == [["Personal data", "Data held"], ["Data subject:", "Sam Sample"], ["Email address:", "sam@example.test"]]
+    assert rows[3][0] == "Internal emails that mention you:"
+    block = rows[3][1]
+    assert "Extract" not in block and TEXT_B in block and "Sam Sample's new address" in block   # flat, unnumbered
+    assert len(rows) == 5 and rows[4] == ["Recruitment decision:", "[Insert]"]
     assert "placeholder" in out.paragraphs[0].text and "INSERT DATA REPORT" not in "\n".join(p.text for p in out.paragraphs)
 
 

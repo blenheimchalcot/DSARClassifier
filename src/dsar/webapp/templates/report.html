@@ -26,20 +26,20 @@
     {% else %}
     <tr class="{{ r.kind }}"><td>{{ r.label }}</td>
       <td>{% if r.kind == "placeholder" %}<span class="ph">{{ r.value }}</span>
-        {% else %}<div class="pre">{{ r.value }}</div>{% endif %}
-        {% if r.extract %}
+        {% elif r.kind == "extracts" %}
+        {% for e in r.extracts %}
+        <div class="flatx"><div class="pre">{{ e.shown }}</div>
         <div class="src">
-          {% for s in r.extract.sources %}
+          {% for s in e.sources %}
           <div class="srcrow">{% if s.chunk_id %}<a href="{{ url_for('review.item', chunk_id=s.chunk_id) }}">{{ s.date[:10] or "undated" }} · {{ s.subject or s.source_type }}</a>
             <form method="post" action="{{ url_for('review.report_stack') }}" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="chunk_id" value="{{ s.chunk_id }}"><button class="btn sm">Narrow in Personal Data Reviewer</button></form>
             {% else %}{{ s.date or "undated" }} · {{ s.source_path.split('/')[-1] }}{% if s.from %} · {{ s.from }}{% endif %}
             <a class="btn sm" href="{{ edit_url(s) }}">Edit in Personal Data Reviewer</a>{% endif %}</div>
           {% endfor %}
-          {% if r.extract.sources | selectattr("span", "equalto", "whole passage") | list %} <span class="pill warn">whole passage</span>{% endif %}
-          {% if "\nFrom:" in "\n" ~ r.value or "\nTo:" in "\n" ~ r.value or "\nSubject:" in "\n" ~ r.value %} <span class="pill bad">email headers</span>{% endif %}
-          {% if r.extract.sources | length > 1 %} <span class="muted">({{ r.extract.sources | length }} sources, merged)</span>{% endif %}
-        </div>
-        {% endif %}
+          {% if e.sources | length > 1 %}<span class="muted">({{ e.sources | length }} sources, merged)</span>{% endif %}
+        </div></div>
+        {% endfor %}
+        {% else %}<div class="pre">{{ r.value }}</div>{% endif %}
       </td></tr>
     {% endif %}
     {% endfor %}
