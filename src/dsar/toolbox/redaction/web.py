@@ -198,6 +198,38 @@ def _all_folders(f: markup.Folder) -> dict:
             "conflicts": markup.conflicts([(fid, docs) for fid, _, docs in loaded])}
 
 
+@bp.route("/f/<fid>/api/context")
+def context(fid):
+    """The element's whole file, and (when the file comes from the case database) its whole item and conversation."""
+    import sqlite3
+
+    from dsar import disclosure, personal_data_report
+    f = _folder(fid)
+    name = request.args.get("file", "")
+    doc = next((d for d in f.docs() if d["name"] == name), None)
+    if doc is None:
+        abort(404)
+    el = next((e for e in doc["elements"] if e["id"] == request.args.get("el")), None)
+    out = {"file": name, "text": markup.screen_text(doc["text"]), "parts": el["parts"] if el else [], "db": None}
+    s = current_app.config["DSAR"]
+    if s.case_bound:
+        from dsar.webapp import cases
+        db_path = cases.family(s).review_dir / "dsar.sqlite"
+        if db_path.is_file():
+            idx = f.folder / personal_data_report.STACK_INDEX
+            cid = (json.loads(idx.read_text(encoding="utf-8")).get(name) or {}).get("chunk_id") if idx.is_file() else None
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            try:
+                if not cid and el:
+                    cid = disclosure.find_chunk(conn, markup.element_text(doc["text"], el), doc["text"])
+                out["db"] = disclosure.context(conn, cid) if cid else None
+                out["matched"] = "stack index" if idx.is_file() else "text match"
+            finally:
+                conn.close()
+    return jsonify(out)
+
+
 def _item_scores(folder: Path, names: list[str]) -> list[dict | None]:
     """For a review stack: each file's item as classified (model score, reason, evidence), from the case database."""
     import sqlite3

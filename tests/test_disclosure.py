@@ -461,3 +461,20 @@ def test_review_stack_files_show_their_classification_and_skip_blank_lines(case,
     assert d["item"]["score"] == 8 and d["item"]["chunk_id"] == "d" and d["item"]["reason"] == "test"
     blank = [el for el in d["elements"] if el["blank"]]
     assert len(blank) == 1 and markup.undecided_count(d) == len(d["elements"]) - 1
+
+
+def test_context_shows_the_whole_item_and_its_thread(case):
+    with db.connect(case / "dsar.sqlite") as conn:
+        conn.execute("UPDATE chunks SET thread_id = 't1' WHERE chunk_id IN ('a', 'b')")
+        conn.execute("INSERT INTO chunks (chunk_id, source_type, source_path, item_ref, subject, content, metadata_json, "
+                     "alias_matched, thread_id, created_at) VALUES ('z', 'email', '/x/z.pst', 'msg-z', 'Re: rota', "
+                     "'A reply that does not name anyone.', '{\"sent\": \"2026-05-01\"}', 0, 't1', '2026-01-01')")
+    app, c = client_for(webapp.Settings.for_case(case))
+    j = c.get("/review/api/context/a").get_json()
+    assert [x["chunk_id"] for x in j["item"]] == ["a"] and j["item"][0]["this"]
+    conv = [x["chunk_id"] for x in j["conversation"]]
+    assert conv == ["b", "a", "z"]                                  # oldest first, including the reply not naming her
+    assert not next(x for x in j["conversation"] if x["chunk_id"] == "z")["about_subject"]
+    assert "Whole item" in c.get("/review/item/a").get_data(as_text=True)
+    with db.connect(case / "dsar.sqlite") as conn:
+        assert disclosure.find_chunk(conn, "Sam Sample's new address is 1 Example Road.") == "a"

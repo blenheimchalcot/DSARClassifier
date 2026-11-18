@@ -184,6 +184,66 @@ def item(conn: sqlite3.Connection, chunk_id: str) -> dict | None:
             "status": status_of(latest_for(conn, chunk_id))}
 
 
+CONTEXT_LIMIT = 300
+
+
+def _ctx_row(r, this: str) -> dict:
+    meta = _meta(r)
+    st = r["source_type"]
+    return {"chunk_id": r["chunk_id"], "this": r["chunk_id"] == this, "source_type": st,
+            "date": report._sent_field(meta, st), "from": report._from_field(meta, st), "to": report._to_field(meta, st),
+            "subject": r["subject"] or "", "about_subject": bool(r["alias_matched"]), "score": r["score"],
+            "content": re.sub("[\U00010000-\U0010FFFF]", "\u25a1", r["content"] or "")}
+
+
+def context(conn: sqlite3.Connection, chunk_id: str) -> dict | None:
+    """The whole item a chunk comes from, and the conversation around it, for a reviewer to read.
+
+    Item: an email is one chunk; any other file (document, spreadsheet, chat export) is every
+    chunk from the same source file, in the order ingested. Conversation: an email's thread, or
+    for a chat every chunk of the same chat file, oldest first. Items that never mention the
+    subject are included too (marked), so the reviewer sees the whole exchange.
+    """
+    sql = ("SELECT c.rowid AS rid, c.*, cl.score FROM chunks c LEFT JOIN classifications cl ON cl.chunk_id = c.chunk_id ")
+    r = conn.execute(sql + "WHERE c.chunk_id = ?", (chunk_id,)).fetchone()
+    if r is None:
+        return None
+    st = r["source_type"]
+    if st == "email":
+        item = conn.execute(sql + "WHERE c.source_path = ? AND c.item_ref = ? ORDER BY c.rowid",
+                            (r["source_path"], r["item_ref"])).fetchall()
+    else:
+        item = conn.execute(sql + "WHERE c.source_path = ? ORDER BY c.rowid LIMIT ?",
+                            (r["source_path"], CONTEXT_LIMIT)).fetchall()
+    conv = []
+    if r["thread_id"]:
+        conv = conn.execute(sql + "WHERE c.thread_id = ? LIMIT ?", (r["thread_id"], CONTEXT_LIMIT)).fetchall()
+    elif st == "chat_message":
+        conv = item
+    rows = lambda rs: [_ctx_row(x, chunk_id) for x in rs]
+    conv_rows = sorted(rows(conv), key=lambda x: (x["date"] or "~", x["chunk_id"]))
+    return {"chunk_id": chunk_id, "source_type": st, "source_path": r["source_path"], "item": rows(item),
+            "conversation": conv_rows, "thread_size": len(conv_rows)}
+
+
+def find_chunk(conn: sqlite3.Connection, text: str, document: str = "") -> str | None:
+    """The chunk a file copied out of the database came from: by the email's Message-ID in the file
+    if it has one (exact), else the chunk containing a distinctive line of this text."""
+    m = re.search(r"^Message-ID:\s*(\S+)", document, re.M)
+    if m:
+        row = conn.execute("SELECT chunk_id FROM chunks WHERE json_extract(metadata_json, '$.message_id') = ? "
+                           "ORDER BY alias_matched DESC LIMIT 1", (m.group(1).strip(),)).fetchone()
+        if row:
+            return row[0]
+    lines = sorted((ln.strip() for ln in text.splitlines() if len(ln.strip()) >= 30), key=len, reverse=True)
+    for ln in lines[:3]:
+        row = conn.execute("SELECT chunk_id FROM chunks WHERE instr(content, ?) > 0 ORDER BY alias_matched DESC LIMIT 1",
+                           (ln[:200],)).fetchone()
+        if row:
+            return row[0]
+    return None
+
+
 def latest_for(conn: sqlite3.Connection, chunk_id: str) -> dict | None:
     hist = history(conn, chunk_id)
     return hist[-1] if hist else None

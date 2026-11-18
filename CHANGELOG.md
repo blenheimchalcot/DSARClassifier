@@ -3,6 +3,8 @@
 ## 0.3.1 (unreleased)
 
 ### Changed
+- **Context** button on every element in the Personal Data Reviewer and on the Review page: the whole document, the whole original item, and the conversation (email thread or chat) around it, oldest first.
+- Repeats show your earlier decision first, then the repeat to decide.
 - **Personal Data Reviewer sections**, across every file in a folder: **To review (7+)** (filter by score), **6 and below** (filter by score; extract one if it should be in), **Repeats** (each beside the element it matches, with *Confirm match*, *Not a match* and *Confirm all*), and **Reviewed** (filter by decision, in the report or not, by hand or copied, reason, score band). *By file* keeps the per-file view. Each element carries its file, so decisions go to the right file and hash.
 - **Personal Data Reviewer: only elements the model scores 7+ need a decision** (`REVIEW_MIN_SCORE`, operator instruction). Elements scored below 7 fold into a *Below 7* bar: no decision needed and nothing in the report, unless the reviewer opens one and extracts it. Elements not yet scored still need a decision. Elements with no letters or digits (`---`) need no decision either.
 - Review-stack files show the item's own classification (model score, reason, evidence) at the top and in the file list.

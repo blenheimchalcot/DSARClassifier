@@ -80,6 +80,15 @@ def item(chunk_id):
                            RELEASE_REDACTED=disclosure.RELEASE_REDACTED, WITHHOLD=disclosure.WITHHOLD)
 
 
+@bp.route("/review/api/context/<chunk_id>")
+def context_api(chunk_id):
+    with _conn() as conn:
+        ctx = disclosure.context(conn, chunk_id)
+    if ctx is None:
+        abort(404)
+    return jsonify(ctx)
+
+
 @bp.route("/review/api/item/<chunk_id>/decide", methods=["POST"])
 def decide(chunk_id):
     s = _settings()
