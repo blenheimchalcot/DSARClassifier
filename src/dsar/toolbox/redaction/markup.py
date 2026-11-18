@@ -1011,7 +1011,7 @@ function renderSection(){const m=document.getElementById("main"),who=[];if(MODE=
   if(F.hw.size)items=items.filter(x=>F.hw.has(x.dec.copied_from?"copied":"by hand"));
   if(F.rr)items=items.filter(x=>x.dec.redactions.some(r=>r.reason===F.rr));
   if(F.sb)items=items.filter(x=>{const s=sc(x.el);return F.sb==="7+"?s!==null&&s>=7:F.sb==="below 7"?s!==null&&s<7:s===null})}
- if(MODE==="repeats"&&items.length)h+=`<div class="bar"><button class="btn primary" id="confirmall">Confirm all ${items.length} shown</button><span class="t">Each repeat is shown beside the element it matches. Confirm to record the same decision under your name; “Not a match” moves it back to be reviewed.</span></div>`;
+ if(MODE==="repeats"&&items.length)h+=`<div class="bar"><button class="btn primary" id="confirmall">Confirm all ${items.length} shown</button><span class="t">Your earlier decision is on the left, the repeat to decide on the right. Confirm to record the same outcome under your name; “Not a match” moves it back to be reviewed.</span></div>`;
  h+=`<p class="t">${items.length} element(s)</p>`;
  let last=null;
  for(const x of items.slice(0,300)){const key=x.fi+"|"+x.el.id;
@@ -1019,10 +1019,10 @@ function renderSection(){const m=document.getElementById("main"),who=[];if(MODE=
   if(MODE==="repeats"&&openRow!==key&&full!==key&&edit?.el!==key){const r=x.rep;
    const w=r.was||{},ms=s=>s==null?`<span class="sc lo">Model –</span>`:`<span class="sc ${s>=7?"hi":s>=5?"mid":"lo"}">Model ${s}</span>`;
    h+=`<div class="el pair ${focus===key?"focus":""}" data-key="${key}" data-el="${key}">
-    <div class="side now"><div class="ph">Repeat · not yet decided ${ms(sc(x.el))}</div><div class="ptxt">${r.redactions?x.el.parts.map(([a,b])=>piece(x.d,a,b,r.redactions.map((m,i)=>({...m,i})),"rel",false)).join(" "):hl(txt(x))}</div>${r.redactions?`<div class="t">Struck text shows the cuts Confirm would apply.</div>`:""}</div>
     <div class="side was"><div class="ph">✓ Your earlier decision ${ms(w.score)}</div>
      <div class="t"><span class="badge ${w.decision}">${LABEL[w.decision]||""}</span>${(w.reasons||[]).length?" "+esc(w.reasons.join(", ")):""} · ${esc(w.reviewer||"")} ${esc((w.ts||"").slice(0,16).replace("T"," "))}${w.copied?" (copied)":""}<br>in ${esc(r.from)}</div>
      <div class="ptxt">${(w.segments||[]).map(g=>g.out?`<span class="wout" title="${esc(g.reason||"")}">${esc(g.text)}</span><span class="why">[${esc(g.reason||"")}]</span>`:`<span class="win">${esc(g.text)}</span>`).join("")||hl(r.text||"")}</div></div>
+    <div class="side now"><div class="ph">Repeat · to decide now ${ms(sc(x.el))}</div><div class="ptxt">${r.redactions?x.el.parts.map(([a,b])=>piece(x.d,a,b,r.redactions.map((m,i)=>({...m,i})),"rel",false)).join(" "):hl(txt(x))}</div>${r.redactions?`<div class="t">Struck text shows the cuts Confirm would apply.</div>`:""}</div>
     <div class="pbtn"><div class="t">Confirm records for the repeat:<br><span class="badge ${r.decision}">${LABEL[r.decision]}</span>${r.reason?" "+esc(r.reason):""}</div><button class="btn go" data-rep="ok">Confirm match</button><button class="btn" data-rep="no">Not a match</button><div class="t" style="margin-top:6px">Or decide it yourself:</div><div class="own">${buttons("pending")}</div></div></div>`;continue}
   if(MODE==="done"&&openRow!==key&&focus!==key){h+=row(x.d,x.el).replace(`data-row="${x.el.id}"`,`data-row="${key}"`).replace("</div>",`${x.dec.copied_from?`<span class="t">copied from ${esc(x.dec.copied_from.split("#")[0])}</span>`:""}</div>`);continue}
   h+=cardHTML(x.d,x.el,key,who)}
