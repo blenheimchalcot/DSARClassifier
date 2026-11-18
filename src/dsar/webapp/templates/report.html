@@ -14,6 +14,39 @@
   <div class="card"><b>{{ data.review.documents | length }}</b><span class="muted small">items released as documents (in full or redacted): not in this report</span></div>
 </div>
 
+<h2 id="preview">Preview</h2>
+<p class="muted small">The report as it would be built now, from the same template and data. Grey notes under each extract are for you only: they go in the private register, not the report.</p>
+{% if pv %}
+<div class="docpreview">
+  {% if blocking or not fam.subject_name %}<p class="draftline">DRAFT: not for release.</p>{% endif %}
+  {% for para in pv.intro %}<p class="{{ 'doctitle' if loop.first }}">{{ para }}</p>{% endfor %}
+  <table class="doctable">
+    {% for r in pv.rows %}
+    {% if r.kind == "header" %}<tr><th>{{ r.label }}</th><th>{{ r.value }}</th></tr>
+    {% else %}
+    <tr class="{{ r.kind }}"><td>{{ r.label }}</td>
+      <td>{% if r.kind == "placeholder" %}<span class="ph">{{ r.value }}</span>
+        {% else %}<div class="pre">{{ r.value }}</div>{% endif %}
+        {% if r.extract %}
+        <div class="src">
+          {% for s in r.extract.sources %}
+          <div class="srcrow">{% if s.chunk_id %}<a href="{{ url_for('review.item', chunk_id=s.chunk_id) }}">{{ s.date[:10] or "undated" }} · {{ s.subject or s.source_type }}</a>
+            <form method="post" action="{{ url_for('review.report_stack') }}" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="chunk_id" value="{{ s.chunk_id }}"><button class="btn sm">Narrow in Personal Data Reviewer</button></form>
+            {% else %}{{ s.date or "undated" }} · {{ s.source_path.split('/')[-1] }}{% if s.from %} · {{ s.from }}{% endif %}
+            <a class="btn sm" href="{{ edit_url(s) }}">Edit in Personal Data Reviewer</a>{% endif %}</div>
+          {% endfor %}
+          {% if r.extract.sources | selectattr("span", "equalto", "whole passage") | list %} <span class="pill warn">whole passage</span>{% endif %}
+          {% if "\nFrom:" in "\n" ~ r.value or "\nTo:" in "\n" ~ r.value or "\nSubject:" in "\n" ~ r.value %} <span class="pill bad">email headers</span>{% endif %}
+          {% if r.extract.sources | length > 1 %} <span class="muted">({{ r.extract.sources | length }} sources, merged)</span>{% endif %}
+        </div>
+        {% endif %}
+      </td></tr>
+    {% endif %}
+    {% endfor %}
+  </table>
+</div>
+{% else %}<p class="muted">No preview without a template.</p>{% endif %}
+
 <h2 id="todo">Left to process</h2>
 {% if not todo %}<p class="note">Nothing left: the next build is final.</p>{% endif %}
 {% set item_groups = todo | selectattr("kind", "equalto", "items") | list %}
@@ -102,38 +135,6 @@
 </table></details>
 {% endif %}
 
-<h2 id="preview">Preview</h2>
-<p class="muted small">The report as it would be built now, from the same template and data. Grey notes under each extract are for you only: they go in the private register, not the report.</p>
-{% if pv %}
-<div class="docpreview">
-  {% if blocking or not fam.subject_name %}<p class="draftline">DRAFT: not for release.</p>{% endif %}
-  {% for para in pv.intro %}<p class="{{ 'doctitle' if loop.first }}">{{ para }}</p>{% endfor %}
-  <table class="doctable">
-    {% for r in pv.rows %}
-    {% if r.kind == "header" %}<tr><th>{{ r.label }}</th><th>{{ r.value }}</th></tr>
-    {% else %}
-    <tr class="{{ r.kind }}"><td>{{ r.label }}</td>
-      <td>{% if r.kind == "placeholder" %}<span class="ph">{{ r.value }}</span>
-        {% else %}<div class="pre">{{ r.value }}</div>{% endif %}
-        {% if r.extract %}
-        <div class="src">
-          {% for s in r.extract.sources %}
-          <div class="srcrow">{% if s.chunk_id %}<a href="{{ url_for('review.item', chunk_id=s.chunk_id) }}">{{ s.date[:10] or "undated" }} · {{ s.subject or s.source_type }}</a>
-            <form method="post" action="{{ url_for('review.report_stack') }}" class="inline"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="chunk_id" value="{{ s.chunk_id }}"><button class="btn sm">Narrow in Personal Data Reviewer</button></form>
-            {% else %}{{ s.date or "undated" }} · {{ s.source_path.split('/')[-1] }}{% if s.from %} · {{ s.from }}{% endif %}
-            <a class="btn sm" href="{{ edit_url(s) }}">Edit in Personal Data Reviewer</a>{% endif %}</div>
-          {% endfor %}
-          {% if r.extract.sources | selectattr("span", "equalto", "whole passage") | list %} <span class="pill warn">whole passage</span>{% endif %}
-          {% if "\nFrom:" in "\n" ~ r.value or "\nTo:" in "\n" ~ r.value or "\nSubject:" in "\n" ~ r.value %} <span class="pill bad">email headers</span>{% endif %}
-          {% if r.extract.sources | length > 1 %} <span class="muted">({{ r.extract.sources | length }} sources, merged)</span>{% endif %}
-        </div>
-        {% endif %}
-      </td></tr>
-    {% endif %}
-    {% endfor %}
-  </table>
-</div>
-{% else %}<p class="muted">No preview without a template.</p>{% endif %}
 {% endblock %}
 {% block scripts %}
 <script src="{{ url_for('static', filename='toolbox.js') }}"></script>
