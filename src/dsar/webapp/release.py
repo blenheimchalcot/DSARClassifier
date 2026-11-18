@@ -204,6 +204,23 @@ def _computed(review_dir: Path, main_output: Path, folders: dict[str, Path]) -> 
     return rows
 
 
+def next_step(computed: list[dict], manual: list[dict], docs: dict) -> dict:
+    """The single most important thing to do now: review, then report, then documents, then sign-off, then send."""
+    for c in computed:
+        if not c["done"]:
+            where = "report" if c["label"].startswith("Personal Data Report built") else "review"
+            return {"text": f"{c['label']}: {c['detail']}", "where": where}
+    for d in docs.get("rows", []):
+        if d["status"] != "ready":
+            return {"text": f"{d['document']}: {d['status']}", "where": "docs"}
+    for m in manual:
+        if not m.get("done") and m["key"] != "sent":
+            return {"text": f"Confirm: {m['label']}", "where": "confirm"}
+    if not next((m for m in manual if m["key"] == "sent"), {}).get("done"):
+        return {"text": "Send the response and record it (Response sent)", "where": "confirm"}
+    return {"text": "Done: the response has been sent.", "where": ""}
+
+
 def status(fam, folders: dict[str, Path]) -> dict:
     main_output = fam.main_dir / "output"
     checks = manual(main_output)
@@ -221,5 +238,6 @@ def status(fam, folders: dict[str, Path]) -> dict:
     docs = documents(fam.main_ref, main_output)
     left = (sum(not r["done"] for r in rows) + sum(not r["done"] for r in computed)
             + sum(r["status"] != "ready" for r in docs["rows"]) + sum(not e["present"] for e in docs["enclosures"]))
-    return {"computed": computed, "manual": rows, "documents": docs, "deadline": deadline, "days_left": days_left,
+    nxt = next_step(computed, rows, docs)
+    return {"computed": computed, "manual": rows, "documents": docs, "deadline": deadline, "days_left": days_left, "next": nxt,
             "left": left, "sent": bool(checks.get("sent", {}).get("done"))}
