@@ -140,6 +140,17 @@ def _intake_counts() -> dict:
         conn.close()
 
 
+@bp.route("/all/")
+def all_review():
+    """The consolidated review: every section across all of the request's folders."""
+    s = current_app.config["DSAR"]
+    skip = _left_out()
+    live = [fid for fid, path in folders().items() if str(path) not in skip]
+    if not s.case_bound or not live:
+        return redirect(url_for(".index"))
+    return redirect(url_for(".page", fid=live[-1], section=request.args.get("section", "review"), all=1))
+
+
 @bp.route("/intake", methods=["POST"])
 def intake():
     """Bring unreviewed classified items into review as a new folder (one file per item, exact text)."""
@@ -226,12 +237,16 @@ def page(fid):
         subject = cases.family(s).subject_name
     if "subject" not in request.args and subject:
         return redirect(url_for(".page", fid=fid, subject=subject.split()[0],
-                                **{k: v for k, v in request.args.items() if k in ("file", "el")}))
+                                **{k: v for k, v in request.args.items() if k in ("file", "el", "section", "all")}))
     from flask import session
+    request_ref = s.case_ref or "DSAR"
+    if s.case_bound:
+        from dsar.webapp import cases
+        request_ref = cases.family(s).main_ref
     head = f'<head><meta name="csrf" content="{html.escape(session.get("csrf", ""))}">'
     bar = (f'<body><div style="padding:6px 16px;font:13px -apple-system,sans-serif;border-bottom:1px solid #8884">'
            f'<a href="{url_for("main.home")}">{html.escape(s.case_ref or "DSAR")}</a> · '
-           f'<a href="{url_for(".index")}">Personal Data Reviewer</a> · {html.escape(str(f.folder.name))}'
+           f'<a href="{url_for(".all_review")}">Personal Data Reviewer</a> · <b>all of {html.escape(request_ref)}</b> · <a href="{url_for(".index")}">Folders and intake</a>'
            f'{(" · <a href=" + chr(34) + url_for("review.report_page") + "#preview" + chr(34) + ">← Report preview</a>") if s.case_bound else ""}'
            f'{" · <b>free-standing: not audit-logged</b>" if not s.case_bound else ""}</div>')
     return markup.APP_PAGE.replace("__REASONS__", json.dumps(markup.REASONS)).replace("<head>", head, 1).replace(
@@ -294,7 +309,7 @@ def _all_folders(f: markup.Folder) -> dict:
         for doc, item in zip(shown, _item_scores(path, [x["name"] for x in docs])):
             if item:
                 doc["item"] = item
-        out.append({"fid": fid, "label": _label(path), "docs": shown, "repeats": markup.repeats_for(docs, sources),
+        out.append({"fid": fid, "label": _label(path), "name": friendly(path), "docs": shown, "repeats": markup.repeats_for(docs, sources),
                     "chain_ok": markup.Folder(path, "", None).events.verify()})
     return {"reviewer": f.reviewer, "folders": out, "chain_ok": all(x["chain_ok"] for x in out),
             "conflicts": markup.conflicts([(fid, docs) for fid, _, docs in loaded])}

@@ -13,7 +13,7 @@
   <p><b>Nothing left to review.</b> Go to the <a href="{{ url_for('review.report_page') }}">Report</a> to build it.</p>
   {% else %}
   <ul class="todo-list">
-    {% for r in todo %}<li><b>{{ r.name }}</b>: {{ r.sections.review }} paragraph(s) to decide <a class="btn sm primary" href="{{ url_for('.page', fid=r.id, section='review') }}">Review them</a></li>{% endfor %}
+    {% for r in todo %}<li><b>{{ r.name }}</b>: {{ r.sections.review }} paragraph(s) to decide <a class="btn sm primary" href="{{ url_for('.all_review', section='review') }}">Review them</a></li>{% endfor %}
     {% if total and total.repeats %}<li><b>Repeats</b>: {{ total.repeats }} <a class="btn sm" href="{{ url_for('.page', fid=live[-1].id, section='repeats') }}">Confirm them</a></li>{% endif %}
     {% if n_conf %}<li><b>Conflicts</b>: {{ n_conf }} <a class="btn sm" href="{{ url_for('.page', fid=live[-1].id, section='conflicts') }}">Resolve them</a></li>{% endif %}
   </ul>
