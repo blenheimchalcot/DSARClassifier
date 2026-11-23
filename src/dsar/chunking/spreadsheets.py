@@ -240,6 +240,11 @@ def _extract_openpyxl(path: Path, matcher: AliasMatcher) -> Iterator[Chunk]:
     try:
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
+            # Read-only mode trusts the sheet's declared <dimension>. Report
+            # exports (Salesforce and others) often declare "A1" for a sheet of
+            # thousands of rows, so only the first cell was read. Ignore it.
+            if hasattr(ws, "reset_dimensions"):
+                ws.reset_dimensions()
             yield from _stream_sheet(sheet_name, ws.iter_rows(values_only=True), path, matcher)
     finally:
         try:

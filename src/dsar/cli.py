@@ -189,8 +189,12 @@ def main() -> None:
 @click.argument("input_dir", type=click.Path(exists=True, file_okay=False, path_type=Path), required=False)
 @click.option("--db-path", default=None, help="SQLite path. Defaults to $DSAR_DATA_DIR/dsar.sqlite.")
 @click.option("--config", "config_path", default=DEFAULT_CONFIG, show_default=True)
+@click.option("--reread", "reread_list", default=None, type=click.Path(exists=True, dir_okay=False),
+              help="Text file of paths (relative to INPUT_DIR, one per line) to read again even though "
+                   "already ingested, e.g. after a reader fix. Chunks are upserted; nothing is deleted.")
 @_audited("ingest")
-def ingest(input_dir: Path | None, db_path: str | None, config_path: str, run: audit.Run) -> None:
+def ingest(input_dir: Path | None, db_path: str | None, config_path: str, reread_list: str | None,
+           run: audit.Run) -> None:
     """Walk INPUT_DIR (default: $DSAR_DATA_DIR/input), chunk every supported file, write to SQLite."""
     data_dir = _data_dir()
     if input_dir is None:
@@ -255,6 +259,15 @@ def ingest(input_dir: Path | None, db_path: str | None, config_path: str, run: a
                 (str(input_dir) + "%",),
             )
         }
+        if reread_list:
+            reread = {str(input_dir / line.strip()) for line in Path(reread_list).read_text().splitlines()
+                      if line.strip()}
+            missing = sorted(reread - {str(p) for p in other_paths})
+            if missing:
+                raise click.ClickException(f"--reread lists {len(missing)} path(s) not under input/: {missing[:3]}")
+            prior_paths -= reread
+            run.data["reread"] = sorted(reread)
+            click.echo(f"Re-reading {len(reread)} file(s) listed in {reread_list}")
         if prior_paths:
             kept = [p for p in other_paths if str(p) not in prior_paths]
             click.echo(

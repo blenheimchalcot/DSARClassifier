@@ -111,3 +111,28 @@ def test_fit_row_splits_an_oversize_row_and_keeps_every_part():
 def dataclasses_replace(c, **kw):
     import dataclasses
     return dataclasses.replace(c, **kw)
+
+
+def test_xlsx_that_declares_a_wrong_dimension_is_read_in_full(tmp_path: Path):
+    # Report exports often declare <dimension ref="A1"/> for a sheet of many rows.
+    import re
+    import zipfile
+    from openpyxl import Workbook
+    from dsar.chunking import spreadsheets
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Learner", "Status"])
+    for i in range(50):
+        ws.append([f"Learner {i}", "On programme"])
+    ws.append(["Emma Banks", "Gateway"])
+    good = tmp_path / "good.xlsx"
+    wb.save(good)
+    bad = tmp_path / "report.xlsx"
+    with zipfile.ZipFile(good) as zin, zipfile.ZipFile(bad, "w") as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                data = re.sub(rb'<dimension ref="[^"]+"', b'<dimension ref="A1"', data)
+            zout.writestr(item, data)
+    rows = [c for c in spreadsheets.extract(bad, _matcher()) if c.alias_matched]
+    assert len(rows) == 1 and rows[0].content == "Learner | Status\nEmma Banks | Gateway"
