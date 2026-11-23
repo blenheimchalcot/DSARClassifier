@@ -1,6 +1,6 @@
 # Reviewing a DSAR workbook: guide for HR and privacy reviewers
 
-You have been sent a workbook (`review_<date>.xlsx`) from a Data Subject Access Request. Each row is a passage of an email, chat or document that an automated classifier scored **7 or more out of 10** for personal information about the person who made the request. Your job is to check the score and decide what happens to each passage in the response.
+You have been sent a workbook (`review_<date>.xlsx`) from a Data Subject Access Request. Each row is a passage of an email, chat or document that an automated classifier scored **6 or more out of 10** for personal information about the person who made the request. Your job is to check the score and decide what happens to each passage in the response.
 
 The workbook holds personal data. Keep it on the device it was given to you on, don't email it or upload it anywhere, and give it back to the operator when you're done.
 
@@ -51,7 +51,7 @@ The drop-down lists keep entries consistent. If none of the reasons fits, choose
 ## For the operator
 
 ```sh
-dsar review export                      # writes output/review_<date>.xlsx (scores 7-10)
+dsar review export                      # writes output/review_<date>.xlsx (scores 6-10)
 dsar review import <returned workbook>  # loads decisions; lists rows that need fixing
 dsar review status                      # decided vs outstanding per score
 ```

@@ -124,6 +124,27 @@ def send_to_reviewer(conn, output_dir: Path, chunk_ids: list[str], reviewer: str
             "index_sha256": audit.sha256_file(folder / STACK_INDEX), "reviewer": reviewer}
 
 
+def stack_item_scores(folder: Path) -> dict[str, int]:
+    """For a review stack: each file's item score as classified, from the case database next to output/."""
+    import json
+    import sqlite3
+
+    idx, db_path = Path(folder) / STACK_INDEX, Path(folder).parent.parent / "dsar.sqlite"
+    if not idx.is_file() or not db_path.is_file():
+        return {}
+    index = json.loads(idx.read_text(encoding="utf-8"))
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        out = {}
+        for name, v in index.items():
+            row = conn.execute("SELECT score FROM classifications WHERE chunk_id = ?", (v.get("chunk_id"),)).fetchone()
+            if row and row[0] is not None:
+                out[name] = row[0]
+        return out
+    finally:
+        conn.close()
+
+
 def _stack_skip(conn, path: Path) -> set[str]:
     """Files in a review stack whose item has since been decided in Review (newest decision isn't IN_REVIEWER)."""
     import json

@@ -18,22 +18,31 @@
     {% if n_conf %}<li><b>Conflicts</b>: {{ n_conf }} <a class="btn sm" href="{{ url_for('.page', fid=live[-1].id, section='conflicts') }}">Resolve them</a></li>{% endif %}
   </ul>
   {% endif %}
-  <p class="small muted">“Below 7” paragraphs are ones the model scored under 7 inside items being reviewed: they need no decision and stay out of the report unless you extract one.</p>
+  <p class="small muted">“Below {{ min_score }}” paragraphs are ones the model scored under {{ min_score }} inside items being reviewed: they need no decision and stay out of the report unless you extract one.</p>
 </div>
-{% if intake %}
-<div class="note"><b>Classified items not yet reviewed:</b>
-  {% for score, n in intake.items() %}
+{% set due = intake | dictsort | selectattr(0, "ge", min_score) | list %}
+{% set under = intake | dictsort | rejectattr(0, "ge", min_score) | list %}
+{% macro intake_button(score, n, primary) %}
   <form method="post" action="{{ url_for('.intake') }}" class="inline" style="margin-left:8px">
     <input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="score" value="{{ score }}">
-    <button class="btn sm{{ ' primary' if score >= 6 }}">Bring {{ n }} item(s) scored {{ score }} into review</button>
+    <button class="btn sm{{ ' primary' if primary }}">Bring {{ n }} item(s) scored {{ score }} into review</button>
   </form>
-  {% endfor %}
-  <div class="small muted">Each item becomes a file in a new folder, its text copied exactly. Items scored below 7 show every paragraph. The step is logged under your name.</div>
+{% endmacro %}
+{% if due %}
+<div class="note"><b>Items scored {{ min_score }}+ not yet reviewed:</b>
+  {% for score, n in due | reverse %}{{ intake_button(score, n, True) }}{% endfor %}
+  <div class="small muted">Each item becomes a file in a new folder, its text copied exactly. The step is logged under your name.</div>
 </div>
+{% endif %}
+{% if under %}
+<details class="small muted" style="margin:8px 0"><summary>Below the review line ({{ under | sum(attribute=1) }} item(s) scored under {{ min_score }}): not reviewed</summary>
+  {% for score, n in under | reverse %}{{ intake_button(score, n, False) }}{% endfor %}
+  <div>Only if you decide to look below the line. Items brought in below {{ min_score }} show every paragraph.</div>
+</details>
 {% endif %}
 {% if n_conf %}<div class="err"><b>{{ n_conf }} conflict(s):</b> the same text is extracted in one place and left out in another, so the report holds it back. <a class="btn sm" href="{{ url_for('.page', fid=(rows | rejectattr("left_out") | list)[-1].id, section='conflicts') }}">Review the conflicts</a></div>{% endif %}
 <table class="t">
-  <tr><th>Folder</th><th>Files</th><th>To review</th><th>Below 7 <span class="muted small">(no decision)</span></th><th>Repeats</th><th>Reviewed</th></tr>
+  <tr><th>Folder</th><th>Files</th><th>To review</th><th>Below {{ min_score }} <span class="muted small">(no decision)</span></th><th>Repeats</th><th>Reviewed</th></tr>
   {% if total and rows | rejectattr("left_out") | list | length > 1 %}
   <tr style="background:var(--bg)"><td><b>All folders</b><div class="muted small">the sections open across every folder below</div></td><td>{{ rows | rejectattr("left_out") | sum(attribute="files") }}</td>
     {% for k in ("review", "low", "repeats", "done") %}

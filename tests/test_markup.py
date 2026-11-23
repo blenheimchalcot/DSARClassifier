@@ -307,3 +307,56 @@ def test_large_items_send_only_lines_naming_the_subject_to_the_model(tmp_path, m
     assert sum(r.get("method") == "alias-prefilter" and r["score"] == 0 for r in rows) == 60
     doc = next(d for d in markup.Folder(folder, "R", None).docs() if d["name"] == "01_report.txt")
     assert markup.undecided_count(doc) == 1                     # only Sam's line needs a decision
+
+
+def test_lines_of_items_at_the_review_line_carry_the_item_score(tmp_path):
+    from dsar.chunking.prefilter import build_matcher
+    from dsar.config import SubjectProfile
+
+    folder = tmp_path / "f"
+    folder.mkdir()
+    report = "\n\n".join([f"Learner {i} | On programme" for i in range(60)] + ["Sam Sample | Gateway"]) + "\n"
+    (folder / "01_report.txt").write_text(report)
+    (folder / "02_row.txt").write_text("ULN | Name | Address\n\n123 | Sam Sample | 1 Example Road\n")
+    (folder / "03_low.txt").write_text("Sam Sample was copied in.\n")
+    sha = {p.name: markup.audit.sha256_file(p) for p in folder.glob("*.txt")}
+    docs = {d["name"]: d for d in markup.Folder(folder, "", None).docs()}
+    # The model saw each line on its own and scored Sam's row 1, a lone name 0.
+    with (folder / markup.SCORES_NAME).open("w") as fh:
+        for name, d in docs.items():
+            for el in d["elements"]:
+                fh.write(json.dumps({"file": name, "sha256": sha[name], "span": el["parts"], "score": 1}) + "\n")
+    matcher = build_matcher(SubjectProfile(name="Sam Sample", aliases=["Sam Sample"], emails=[]))
+    n = markup.carry_item_scores(folder, {"01_report.txt": 7, "02_row.txt": markup.REVIEW_MIN_SCORE, "03_low.txt": 1},
+                                 matcher=matcher, short_max=50, model="m", prompt_sha="p")
+    assert n == 3                       # Sam's report line, and both lines of the short row item; not the item scored 1
+    docs = {d["name"]: d for d in markup.Folder(folder, "", None).docs()}
+    assert markup.undecided_count(docs["01_report.txt"]) == 1          # the other 60 learners stay below the line
+    assert markup.undecided_count(docs["02_row.txt"]) == 2
+    assert markup.undecided_count(docs["03_low.txt"]) == 0
+    rows = [json.loads(l) for l in (folder / markup.SCORES_NAME).read_text().splitlines()]
+    assert all("Model's own line score: 1" in r["description"] for r in rows if r.get("method") == "item-score-carried")
+    assert markup.carry_item_scores(folder, {"01_report.txt": 7}, matcher=matcher, short_max=50) == 0   # idempotent
+
+
+def test_docs_cache_follows_every_change(tmp_path):
+    folder = tmp_path / "f"
+    folder.mkdir()
+    (folder / "a.txt").write_text("First paragraph.\n\nSecond paragraph.\n")
+    f = markup.Folder(folder, "R", None)
+    d = f.docs()[0]
+    d["elements"][0]["extra"] = 1                                   # a caller's change never reaches the cache
+    assert "extra" not in markup.Folder(folder, "R", None).docs()[0]["elements"][0]
+    f.act({"file": "a.txt", "sha256": d["sha256"], "action": "decide", "element": d["elements"][0]["id"],
+           "decision": "release"})
+    assert len(markup.Folder(folder, "R", None).docs()[0]["decisions"]) == 1     # the new event is seen at once
+    (folder / "b.txt").write_text("Another file.\n")
+    assert len(markup.Folder(folder, "R", None).docs()) == 2
+    assert markup.Folder(folder, "R", None).events.verify()
+
+
+def test_page_carries_the_review_line_and_the_subjects_names():
+    page = markup.app_page(["Sam Sample", "sam@example.com", "SS"])
+    assert f"const MIN={markup.REVIEW_MIN_SCORE}," in page
+    assert '"Sam Sample"' in page and '"sam@example.com"' in page and '"SS"' not in page   # too short to highlight
+    assert "__" + "NAMES__" not in page and "__" + "MIN__" not in page

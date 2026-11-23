@@ -16,7 +16,7 @@ Local pipeline for GDPR / UK GDPR Data Subject Access Requests over Microsoft Pu
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): building it on a new machine or server, including for another organisation.
 - [docs/HANDOVER.md](docs/HANDOVER.md): handing the platform to another organisation: release pack and sign-off checklist.
 - [docs/COVERAGE.md](docs/COVERAGE.md): what each source gives and what needs a person.
-- [docs/REVIEWER_GUIDE.md](docs/REVIEWER_GUIDE.md): for HR and privacy reviewers deciding on items scored 7-10.
+- [docs/REVIEWER_GUIDE.md](docs/REVIEWER_GUIDE.md): for HR and privacy reviewers deciding on items scored 6-10.
 - [docs/TOOLBOX.md](docs/TOOLBOX.md): the local web app (`dsar serve`) and its toolbox: mail viewer, Teams viewer, redaction.
 - [docs/REVIEW_APP_PLAN.md](docs/REVIEW_APP_PLAN.md): plan for the rest of the web app, which will replace the workbooks.
 - [docs/MOVING_LAPTOP.md](docs/MOVING_LAPTOP.md): operator-internal: moving our own setup and live cases to another laptop.

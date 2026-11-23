@@ -1333,7 +1333,7 @@ def markup_serve_cmd(folder: str, reviewer: str, subject: str, port: int, no_bro
 def markup_score_cmd(folder: str, config_path: str, system_prompt: str, prefilter_min_elements: int,
                      run: audit.Run) -> None:
     """Suggest a 0-10 score for every element in FOLDER with the local model (a hint, never a decision)."""
-    from dsar import classify
+    from dsar import classify, personal_data_report
     from dsar.toolbox.redaction import markup
 
     cfg = load_config(config_path)
@@ -1348,12 +1348,14 @@ def markup_score_cmd(folder: str, config_path: str, system_prompt: str, prefilte
     result = asyncio.run(markup.score_folder(
         Path(folder), system_prompt=prompt, model=cfg.model.default, subject_name=cfg.subject.name,
         max_tokens=cfg.model.max_tokens, temperature=cfg.model.temperature, concurrency=cfg.model.concurrency,
-        progress=progress, matcher=build_matcher(cfg.subject), prefilter_min_elements=prefilter_min_elements))
+        progress=progress, matcher=build_matcher(cfg.subject), prefilter_min_elements=prefilter_min_elements,
+        item_scores=personal_data_report.stack_item_scores(Path(folder))))
     run.data.update(result)
     run.hash_file("markup_scores", Path(folder) / markup.SCORES_NAME)
     click.echo(f"Scored {result['scored']} of {result['elements']} element(s); {result['failed']} failed; "
                f"{result['already_scored']} already scored; {result['prefiltered']} not sent to the model "
-               f"(do not name the subject, in items over {prefilter_min_elements} elements).")
+               f"(do not name the subject, in items over {prefilter_min_elements} elements); "
+               f"{result['carried']} line(s) carry their item's score {markup.REVIEW_MIN_SCORE}+ (method item-score-carried).")
 
 
 @main.command(name="serve")

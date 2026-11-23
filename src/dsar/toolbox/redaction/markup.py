@@ -39,6 +39,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from dsar import audit
+from dsar.review import MIN_SCORE as REVIEW_MIN_SCORE   # one review line for items and paragraphs
 
 EVENTS_NAME = "markup_events.jsonl"
 SCORES_NAME = "markup_scores.jsonl"
@@ -130,10 +131,32 @@ class Events:
         with Events._guard:
             self._lock = Events._locks.setdefault(str(self.path.resolve()), threading.Lock())
 
+    _cache: dict[str, tuple] = {}          # path -> (size, mtime_ns, lines, parsed events, chain ok)
+
+    def _read(self) -> tuple:
+        try:
+            st = self.path.stat()
+        except FileNotFoundError:
+            return ([], [], True)
+        key = str(self.path)
+        hit = Events._cache.get(key)
+        if hit and hit[:2] == (st.st_size, st.st_mtime_ns):
+            return hit[2:]
+        lines = [ln for ln in self.path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        parsed, prev, ok = [], GENESIS, True
+        for ln in lines:
+            e = json.loads(ln)
+            ok = ok and e["prev"] == prev
+            prev = hashlib.sha256(ln.encode()).hexdigest()
+            parsed.append(e)
+        Events._cache[key] = (st.st_size, st.st_mtime_ns, lines, parsed, ok)
+        return lines, parsed, ok
+
     def lines(self) -> list[str]:
-        if not self.path.exists():
-            return []
-        return [ln for ln in self.path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        return list(self._read()[0])
+
+    def parsed(self) -> list[dict]:
+        return self._read()[1]
 
     def append(self, event: dict) -> dict:
         with self._lock:
@@ -145,16 +168,11 @@ class Events:
         return entry
 
     def verify(self) -> bool:
-        prev = GENESIS
-        for ln in self.lines():
-            if json.loads(ln)["prev"] != prev:
-                return False
-            prev = hashlib.sha256(ln.encode()).hexdigest()
-        return True
+        return self._read()[2]
 
     def for_file(self, name: str, sha: str) -> list[dict]:
         """This file's events, oldest first; events made on another version of it are left out."""
-        return [e for e in map(json.loads, self.lines()) if e["file"] == name and e["sha256"] == sha]
+        return [dict(e) for e in self.parsed() if e["file"] == name and e["sha256"] == sha]
 
 
 def redacted_text(text: str, start: int, end: int, redactions: list[dict]) -> list[tuple[str, dict | None]]:
@@ -243,14 +261,38 @@ class Folder:
         return {**doc, "decisions": decisions, "earlier": earlier,
                 "redactions": [r for d in decisions.values() for r in d["redactions"]]}
 
+    _docs_cache: dict[str, tuple] = {}     # folder -> (state signature, docs)
+
+    def _state(self) -> tuple:
+        """Everything docs() depends on, as sizes and modification times (cheap to read on every request)."""
+        def sig(p: Path):
+            try:
+                st = p.stat()
+                return (p.name, st.st_size, st.st_mtime_ns)
+            except FileNotFoundError:
+                return (p.name, None)
+        extra = [self.folder / n for n in (EVENTS_NAME, SCORES_NAME, SETTINGS_NAME)]
+        return (self.min_score, tuple(sig(p) for p in self.files() + extra))
+
     def docs(self) -> list[dict]:
+        """Every file's elements and decisions. Cached until the folder changes; each call gets its own
+        copy of the file and element dicts, so callers may add keys without touching the cache."""
+        state, key = self._state(), str(self.folder.resolve())
+        hit = Folder._docs_cache.get(key)
+        if not hit or hit[0] != state:
+            hit = (state, self._docs())
+            Folder._docs_cache[key] = hit
+        return [{**d, "elements": [dict(el) for el in d["elements"]]} for d in hit[1]]
+
+    def _docs(self) -> list[dict]:
         scores = self.scores()
+        events_all = self.events.parsed()
         out = []
         for p in self.files():
             text = p.read_text(encoding="utf-8", errors="replace")
             sha = audit.sha256_file(p)
-            events = self.events.for_file(p.name, sha)
-            other = sum(1 for e in map(json.loads, self.events.lines()) if e["file"] == p.name and e["sha256"] != sha)
+            events = [dict(e) for e in events_all if e["file"] == p.name and e["sha256"] == sha]
+            other = sum(1 for e in events_all if e["file"] == p.name and e["sha256"] != sha)
             doc = self.resolve(text, events)
             for el in doc["elements"]:
                 el["score"] = scores.get((p.name, sha, json.dumps(el["parts"])))
@@ -401,9 +443,6 @@ def screen_docs(docs: list[dict]) -> list[dict]:
 def is_blank(text: str, el: dict) -> bool:
     """No letters or digits (a '---' rule, a lone bullet): nothing to decide, nothing to extract."""
     return not re.search(r"\w", "".join(text[a:b] for a, b in el["parts"]))
-
-
-REVIEW_MIN_SCORE = 7          # operator instruction 2026-11-17: only elements the model scores 7+ are reviewed
 
 
 def below_threshold(el: dict, min_score: int = REVIEW_MIN_SCORE) -> bool:
@@ -675,13 +714,19 @@ PREFILTER_DESCRIPTION = ("Not sent to the model: does not name the subject (a li
 
 async def score_folder(folder: Path, *, system_prompt: str, model: str, subject_name: str, max_tokens: int,
                        temperature: float, concurrency: int, progress=None, matcher=None,
-                       prefilter_min_elements: int = 0) -> dict:
+                       prefilter_min_elements: int = 0, item_scores: dict[str, int] | None = None) -> dict:
     """Score every element not yet scored with this model and prompt; append to SCORES_NAME.
 
     With a matcher and prefilter_min_elements, an item with more elements than that (a
     report or table, e.g. a weekly report email of 600 learner rows) sends only its
     elements that name the subject to the model; the rest are recorded as score 0 with
     method "alias-prefilter", the same rule ingest uses to choose what to classify.
+
+    With item_scores (file name -> the item's own classification), an item scored at or above
+    the review line keeps that score on its lines that name the subject, and on every line of an
+    item of prefilter_min_elements lines or fewer, wherever the model scored the line lower on
+    its own: a table row or a lone name cell loses the context that made the item personal data.
+    These rows have method "item-score-carried" and keep the model's line score in the description.
     """
     import asyncio
 
@@ -746,9 +791,43 @@ async def score_folder(folder: Path, *, system_prompt: str, model: str, subject_
 
     async with httpx.AsyncClient(base_url=classify.ollama_url(), timeout=300.0) as client:
         await asyncio.gather(*(one(client, item) for item in todo))
+    carried = carry_item_scores(Path(folder), item_scores or {}, matcher=matcher, short_max=prefilter_min_elements,
+                                model=model, prompt_sha=prompt_sha)
     return {"elements": len(todo), "already_scored": len(done), "scored": counts["scored"], "failed": counts["failed"],
             "prefiltered": len(prefiltered), "prefilter_min_elements": prefilter_min_elements if matcher else 0,
-            "prompt_sha256": prompt_sha, "model": model}
+            "carried": carried, "prompt_sha256": prompt_sha, "model": model}
+
+
+def carry_item_scores(folder: Path, item_scores: dict[str, int], *, matcher=None, short_max: int = 0,
+                      model: str = "", prompt_sha: str | None = None) -> int:
+    """Give lines of items scored at or above the review line their item's score (see score_folder)."""
+    f = Folder(folder, "", None)
+    scores = f.scores()
+    rows = []
+    for d in f._docs():
+        item = item_scores.get(d["name"])
+        if item is None or item < REVIEW_MIN_SCORE:
+            continue
+        elements = [el for el in d["elements"] if element_text(d["text"], el).strip() and not el["blank"]]
+        short = len(elements) <= short_max
+        for el in elements:
+            text = element_text(d["text"], el)
+            named = bool(matcher) and matcher.matches(text)
+            if not (named or short):
+                continue
+            own = (scores.get((d["name"], d["sha256"], json.dumps(el["parts"]))) or {}).get("score")
+            if own is not None and own >= item:
+                continue
+            why = "names the subject" if named else f"is part of a short item ({len(elements)} lines)"
+            rows.append({"file": d["name"], "sha256": d["sha256"], "span": el["parts"], "score": item,
+                         "description": f"Item scored {item} as a whole; this line {why}, so it carries the item's "
+                                        f"score for review. Model's own line score: {'–' if own is None else own}.",
+                         "evidence": None, "special": None, "model": model, "prompt_sha256": prompt_sha,
+                         "method": "item-score-carried", "ts": _now()})
+    if rows:
+        with (Path(folder) / SCORES_NAME).open("a", encoding="utf-8") as fh:
+            fh.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in rows)
+    return len(rows)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -778,7 +857,7 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._authorised(q):
             return self._send(403, '{"error": "missing or wrong token"}')
         if url.path == "/":
-            return self._send(200, APP_PAGE.replace("__REASONS__", json.dumps(REASONS)), "text/html")
+            return self._send(200, app_page(), "text/html")
         if url.path == "/api/docs":
             return self._send(200, json.dumps({"reviewer": self.folder.reviewer, "docs": screen_docs(self.folder.docs()),
                                                "chain_ok": self.folder.events.verify()}))
@@ -823,6 +902,13 @@ def serve(folder: Path, reviewer: str, case_output: Path | None, port: int = 0) 
 
 
 
+def app_page(names: list[str] | tuple = ()) -> str:
+    """The reviewer page, with the reasons, the review line and the subject's names (highlighted in the text)."""
+    names = sorted({n.strip() for n in names if n and len(n.strip()) >= 3}, key=len, reverse=True)
+    return (APP_PAGE.replace("__REASONS__", json.dumps(REASONS)).replace("__MIN__", str(REVIEW_MIN_SCORE))
+            .replace("__NAMES__", json.dumps(names)))
+
+
 APP_PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Personal Data Reviewer</title>
 <style>
@@ -857,6 +943,7 @@ main{padding:0 32px 64px;max-width:940px;width:100%}
 .itemscore{background:var(--bg);border-left:3px solid var(--part,#c80);border-radius:6px;padding:8px 12px;margin:0 0 10px;font-size:14px}.itemscore .ev{font-size:12px;opacity:.75;margin-top:4px}.sect{display:flex;justify-content:space-between;align-items:center;width:100%;font-weight:600}.sect .cnt{font-weight:600;background:var(--bg);border-radius:99px;padding:0 8px;font-size:12px}.sect.on .cnt{color:var(--ink,#1d1d1b);background:#fff}.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0}.chip{border:1px solid var(--line);background:var(--panel);border-radius:99px;padding:2px 10px;font:inherit;font-size:12px;cursor:pointer}.chip.on{background:var(--accent,#2f5d8a);color:#fff;border-color:transparent}.chip.clear{opacity:.7}.filehead{margin:16px 0 6px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}.pair{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:start;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0;background:var(--panel)}.pair .ptxt{white-space:pre-wrap;font-size:14px;margin-top:4px}.pair .pbtn{display:flex;flex-direction:column;gap:6px;max-width:240px;font-size:13px}.pair .own{display:flex;flex-direction:column;gap:4px}.pair .own .btn{font-size:13px;padding:3px 8px}.el.pair{display:grid}.pair .ph{font-weight:600;font-size:13px;display:flex;gap:8px;align-items:center;margin-bottom:4px}.pair .side{padding:8px;border-radius:6px}.pair .side.now{background:var(--bg)}.grpn{background:#fff1b8;color:#7a5200;border-radius:99px;padding:0 8px;font-size:12px}.pair.conf .side.now{background:#fbe3e1;border-left:3px solid var(--red,#b3261e)}.pair .win{background:#d9f2e0;border-radius:2px}.pair .wout{text-decoration:line-through;color:var(--red,#b3261e);background:#fbe3e1}.pair .why{font-size:11px;color:var(--red,#b3261e);margin:0 4px}.pair .side.was{background:var(--okbg,#e6f4ea);border-left:3px solid var(--ok,#2e7d4f)}.ctx{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:50;display:flex;align-items:center;justify-content:center}.ctx[hidden]{display:none}.ctxbox{background:var(--panel,#fff);color:var(--ink,#1d1d1b);width:min(1000px,94vw);height:88vh;border-radius:10px;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,.3)}.ctxhead{display:flex;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}.ctxbody{overflow:auto;padding:12px 16px;flex:1}.ctxt{white-space:pre-wrap;font-size:14px;line-height:1.5}.ctxt mark,.ctx mark{background:#ffe58a;padding:0 1px}.ctxc{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:8px 0}.ctxc.here{border:2px solid #c80;background:#fff8e1}.ctxm{font-size:12px;color:var(--muted);margin-bottom:4px}.ctxb{margin-left:6px;font-size:11px;padding:1px 7px}.wibar{margin:0 0 10px}.wi{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;margin-left:10px;text-transform:none;letter-spacing:0;font-weight:400}.filehead .wi .btn{font-size:11px;padding:1px 8px}.itemwhy{text-transform:none;letter-spacing:0;font-weight:400;font-size:13px;color:var(--ink,#1d1d1b);margin-top:4px}.scope{background:var(--hl,#fff4d6);border-radius:8px;padding:8px 12px;margin:0 0 10px;font-size:14px}.el.p-hi{border-left:6px solid #c62828!important}.el.p-mid{border-left:6px solid #ef6c00!important}.el.p-low{border-left:6px solid #f2b705!important}.el.p-un{border-left:6px solid #9e9e9e!important}.nextbar{display:flex;gap:12px;align-items:center;justify-content:space-between;background:#fdecea;border:1px solid #f5c2c0;border-radius:8px;padding:10px 14px;margin:0 0 12px;font-size:14px}.nextbar.done{background:#e6f4ea;border-color:#b7dfc4}.lt{border-radius:99px;padding:0 8px;font-size:12px;font-weight:700;color:#fff;background:#c62828}.lt.amb{background:#ef6c00}.lt.ok{background:#2e7d4f}.form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;font-size:13px}.form.top{justify-content:flex-end;margin:8px 0 10px}.form.col{flex-direction:column;align-items:flex-end}.form .frow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end}.btn kbd{font:600 10px/1 var(--mono,monospace);border:1px solid currentColor;border-radius:3px;padding:1px 4px;margin-left:4px;opacity:.6}
 .form select,.form input{padding:4px 6px;font:inherit;font-size:13px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px}.form input{flex:1;min-width:140px}
 mark{background:#ffe066;color:#000}
+.nm{background:var(--subj);box-shadow:inset 0 -2px 0 var(--subj-line);font-weight:600;border-radius:2px}
 .prior{font-size:13px;background:var(--partbg);color:var(--part);border-radius:6px;padding:4px 10px;margin-top:6px}
 .cutpt{display:inline-block;width:3px;height:1.2em;background:var(--accent);vertical-align:text-bottom;margin:0 1px}
 .el.splitting .txt{cursor:crosshair}
@@ -884,6 +971,7 @@ const COLOURS=["#2f5d8a","#2e7d4f","#8a4b9c","#b5651d","#1f7a8c"];
 const LABEL={release:"Extracted",redact_full:"Left out",redact_partial:"Extracted in part",pending:"Not reviewed"};
 let DOCS=[],cur=0,view="original",q="",edit=null,full=null,split=null,minScore=-1,focus=null,lastReason=REASONS[0],doneOpen=false,openRow=null,REP={},CONF=[],GROUPS=[],EXPAND=new Set(),repOpen=false,lowOpen=false,MODE="review",DISMISS=new Set(),F={rs:new Set(),ls:new Set(),dd:new Set(),ir:new Set(),hw:new Set(),fd:new Set(),rr:"",sb:""};
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const MIN=__MIN__,NAMES=__NAMES__,RX=s=>s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),NAME_RE=NAMES.length?new RegExp("("+NAMES.map(n=>RX(esc(n))).join("|")+")","gi"):null;
 const reasonOpts=()=>REASONS.map(x=>`<option>${esc(x)}</option>`).join("");
 function toast(m){const t=document.getElementById("toast");t.textContent=m;t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",3000)}
 function rk(d){return d.fid?d.fid+"/"+d.name:d.name}
@@ -895,7 +983,7 @@ function nav(){const f=document.getElementById("files");f.innerHTML="";const c=c
  for(const k in SECTIONS){const b=document.createElement("button");b.className="sect"+(MODE===k?" on":"");b.innerHTML=`${SECTIONS[k]}${k==="low"||k==="done"?`<span class="cnt">${c[k]}</span>`:light(k,c[k])}`;b.onclick=()=>{MODE=k;q="";openRow=null;edit=null;full=null;split=null;focus=null;render();scrollTo(0,0)};f.appendChild(b)}
  const hd=document.createElement("div");hd.className="t";hd.style.margin="12px 0 4px";hd.textContent="By file";f.appendChild(hd);
  let lastF=null;DOCS.forEach((d,i)=>{if(d.folder&&d.folder!==lastF){const fh=document.createElement("div");fh.className="t";fh.style.margin="10px 0 2px";fh.style.fontWeight="600";fh.textContent=d.fname||d.folder;f.appendChild(fh);lastF=d.folder}const n=Object.keys(d.decisions).length,nr=Object.keys(REP[rk(d)]||{}).length,tot=d.elements.filter(e=>(!e.blank&&!e.below)||d.decisions[e.id]).length,b=document.createElement("button");b.className=MODE==="file"&&i===cur?"on":"";b.innerHTML=esc(d.name.replace(/\.txt$/,"").replace(/_/g," "))+`<span class="prog">${d.item&&d.item.score!=null?`score ${d.item.score} · `:""}${n}/${tot} reviewed · ${d.redactions.length} passage(s) left out${nr?` · ${nr} repeat(s)`:""}</span>`;b.onclick=()=>{if(edit&&!confirm("Discard unsaved marks?"))return;MODE="file";cur=i;q="";edit=null;full=null;split=null;focus=(d.elements.find(e=>!d.decisions[e.id]&&!e.blank&&!e.below&&!(REP[rk(d)]||{})[e.id])||{}).id;nav();render();scrollTo(0,0)};f.appendChild(b)})}
-function hl(s){let e=esc(s);if(q){const re=new RegExp("("+q.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+")","gi");e=e.replace(re,"<mark>$1</mark>")}return e}
+function hl(s){let e=esc(s);if(q){const re=new RegExp("("+q.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+")","gi");e=e.replace(re,"<mark>$1</mark>")}if(NAME_RE)e=e.replace(NAME_RE,'<span class="nm">$1</span>');return e}
 // One part [a,b] of an element, with redactions rs; cls is the class for released text
 function piece(d,a,b,rs,cls,editable){let out="",pos=a;const seg0=(x,y)=>`<span data-s="${x}" class="${cls}">${hl(d.text.slice(x,y))}</span>`;
  const seg=(x,y)=>split&&split.at>x&&split.at<y?seg0(x,split.at)+`<span class="cutpt"></span>`+seg0(split.at,y):seg0(x,y);
@@ -926,15 +1014,15 @@ function cardHTML(d,el,key,who){
   if(editing)top=`<div class="form top">Select text below to mark it. Reason for new marks: <select id="er">${reasonOpts()}</select><input id="en" placeholder="Note (required for Other)" value="${esc(edit.note||"")}"></div>`;
   if(splitting){const opts=[...who,"Unknown speaker"].map(w=>`<option ${w===split.who?"selected":""}>${esc(w)}</option>`).join("");
    form=`<div class="form">${split.at==null?"Click in the text where the new part should start.":"New part starts at the blue line. Speaker of the new part:"} <select id="sw">${opts}</select><button class="btn primary" data-a="splitok" ${split.at==null?"disabled":""}>Split here</button><button class="btn" data-a="splitcancel">Cancel</button></div>`}
-  if(full===key)top=`<div class="form top col"><div class="frow"><button class="btn stop" data-a="fullok">Leave out (Enter)</button><button class="btn" data-a="fullcancel">Cancel (Esc)</button></div><div class="frow">Leave all of this element out. Reason: <select id="fr">${REASONS.map(x=>`<option ${x===lastReason?"selected":""}>${esc(x)}</option>`).join("")}</select><input id="fn" placeholder="Note (required for Other)"></div></div>`;
-  const s=el.score,chip=s?(s.score==null?`<span class="sc lo" title="${esc(s.special||s.description||"")}">Model: –</span>`:`<span class="sc ${s.score>=7?"hi":s.score>=5?"mid":"lo"}" title="Model suggestion, not a decision: ${esc(s.description||"")}${s.evidence?" | "+esc(s.evidence):""}">Model ${s.score}</span>`):"";
+  if(full===key)top=`<div class="form top col"><div class="frow"><button class="btn stop" data-a="fullok">Leave out (Enter)</button><button class="btn" data-a="fullcancel">Cancel (Esc)</button></div><div class="frow">Leave all of this element out. Reason (press its number): <select id="fr">${REASONS.map((x,i)=>`<option value="${esc(x)}" ${x===lastReason?"selected":""}>${i+1} · ${esc(x)}</option>`).join("")}</select><input id="fn" placeholder="Note (required for Other)"></div></div>`;
+  const s=el.score,chip=s?(s.score==null?`<span class="sc lo" title="${esc(s.special||s.description||"")}">Model: –</span>`:`<span class="sc ${s.score>=MIN?"hi":s.score>=5?"mid":"lo"}" title="Model suggestion, not a decision: ${esc(s.description||"")}${s.evidence?" | "+esc(s.evidence):""}">Model ${s.score}</span>`):"";
   const name=el.who?`<b>${esc(el.who)}${el.split?" <span class='t'>(split by reviewer)</span>":""}</b><span class="t">${esc(el.t||"")}</span>`:`<b style="color:var(--muted)">${esc(el.label)}</b>`;
   return `<div class="el ${st} ${prio(el,dec)} ${subj?"subj":""} ${editing?"editing":""} ${splitting?"editing splitting":""} ${focus===key?"focus":""}" data-el="${key}" style="--c:${c}"><div class="h">${name}${chip}<button class="btn sm ctxb" data-ctx type="button" title="See the whole document, item and conversation">Context</button>${ctl}</div>${top}${prior?`<div class="prior">Decided before this element was split: ${prior}. Please decide again.</div>`:""}<div class="txt">${body}</div>${form}</div>`}
 function render(){if(MODE!=="file")return renderSection();const d=DOCS[cur],m=document.getElementById("main");if(!d){m.innerHTML="<p>No .txt files in this folder.</p>";return}
  const who=[...new Set(d.elements.map(e=>e.who).filter(Boolean))],n=Object.keys(d.decisions).length,total=d.elements.filter(e=>(!e.blank&&!e.below)||d.decisions[e.id]).length;
  let h=`<div class="bar"><input type="search" id="q" placeholder="Search…" value="${esc(q)}"><span class="toggle"><button data-v="original" class="${view==="original"?"on":""}">Original</button><button data-v="redacted" class="${view==="redacted"?"on":""}">As extracted</button></span>
   <select id="min" class="btn" title="Show only elements the model scored at or above this"><option value="-1">All scores</option>${[1,5,6,7,8].map(n=>`<option value="${n}" ${minScore===n?"selected":""}>Model score ≥ ${n}</option>`).join("")}</select><button class="btn" id="all">Extract all not yet reviewed</button><button class="btn primary" id="exp">Export redacted copy</button></div>
-  <div class="legend"><span><i class="sw" style="background:var(--okbg);border:1px solid var(--ok)"></i>Extracted</span><span><i class="sw" style="background:var(--redbg);border:1px solid var(--red)"></i>Left out</span><span>${n} of ${total} elements reviewed</span><span class="keys"><kbd>E</kbd> extract · <kbd>L</kbd> leave out · <kbd>P</kbd> leave part out · <kbd>↓</kbd><kbd>↑</kbd> move · <kbd>Enter</kbd> confirm</span></div>`;
+  <div class="legend"><span><i class="sw" style="background:var(--okbg);border:1px solid var(--ok)"></i>Extracted</span><span><i class="sw" style="background:var(--redbg);border:1px solid var(--red)"></i>Left out</span><span>${n} of ${total} elements reviewed</span><span class="keys"><kbd>E</kbd> extract · <kbd>L</kbd> leave out, then <kbd>1</kbd>–<kbd>9</kbd> for the reason · <kbd>⇧L</kbd> leave out, same reason as last · <kbd>P</kbd> leave part out · <kbd>W</kbd> / <kbd>X</kbd> whole item in / out · <kbd>C</kbd> context · <kbd>↓</kbd><kbd>↑</kbd> move</span></div>`;
  if(d.item)h+=`<div class="itemscore">Classified as a whole item: <b>model score ${d.item.score??"–"}</b>${d.item.reason?" · "+esc(d.item.reason):""}${d.item.evidence?`<div class="ev">Evidence: “${esc(d.item.evidence)}”</div>`:""}</div>`;
  h+=wiControls(d,cur)?`<div class="wibar">${wiControls(d,cur)}</div>`:"";
  if(d.stale)h+=`<div class="warn">${d.stale} earlier decision(s) were made on a different version of this file and are not shown.</div>`;
@@ -954,7 +1042,7 @@ function render(){if(MODE!=="file")return renderSection();const d=DOCS[cur],m=do
  if(reps.length){h+=`<div class="done rep"><div class="dbar"><button class="btn primary" id="applyrep">Apply the same decisions to ${reps.length} repeat(s)</button><span class="t">Same text as elements you have already decided</span><span class="sp"></span><button class="btn" id="rtoggle">${repOpen?"Hide":"Show them"}</button></div>`;
   h+=repOpen?reps.map(el=>active(el.id)?cards[el.id]:`<div class="row" data-row="${el.id}"><span class="badge pending">Repeat</span><span class="t">${R[el.id].kind==="duplicate"?"Duplicate of "+esc(R[el.id].from):esc(R[el.id].from)+": "+LABEL[R[el.id].decision]+(R[el.id].reason?" ("+esc(R[el.id].reason)+")":"")}</span> ${esc(el.parts.map(([a,b])=>d.text.slice(a,b)).join(" ").replace(/\s+/g," ").slice(0,140))}</div>`).join(""):reps.filter(el=>active(el.id)).map(el=>cards[el.id]).join("");
   h+=`</div>`}
- if(low.length){h+=`<div class="done low"><button class="dbar" id="ltoggle">${lowOpen?"▾":"▸"} Below 7: ${low.length}<span class="t">the model scored these under 7, so they are not reviewed and stay out of the report</span><span class="sp"></span><span class="t">${lowOpen?"Hide":"Show"}</span></button>`;
+ if(low.length){h+=`<div class="done low"><button class="dbar" id="ltoggle">${lowOpen?"▾":"▸"} Below ${MIN}: ${low.length}<span class="t">the model scored these under ${MIN}, so they are not reviewed and stay out of the report</span><span class="sp"></span><span class="t">${lowOpen?"Hide":"Show"}</span></button>`;
   h+=lowOpen?low.map(el=>cards[el.id]).join(""):low.filter(el=>active(el.id)).map(el=>cards[el.id]).join("");h+=`</div>`}
  h+=todo.length?todo.map(el=>cards[el.id]).join(""):reps.length?`<p class="alldone">Only repeats are left: apply the same decisions above, or open one to decide it differently.</p>`:`<p class="alldone">Every element ${q||minScore>=0?"shown here ":""}is reviewed. Open “Processed” to check them, or export the redacted copy.</p>`;
  m.innerHTML=h;
@@ -988,7 +1076,7 @@ function wire(m){wireWI(m);
   else if(a==="unsplit"){if(confirm("Undo this split? Decisions on either part will need to be made again."))if(await act({action:"unsplit",at:+id.slice(1)}))await load(true)}
   else if(a==="change"){if(confirm("Clear this element's decision? It becomes not reviewed (the earlier decision stays in the log)."))if(await act({action:"reset",element:id}))await load(true)}});
  m.querySelectorAll(".el").forEach(x=>x.addEventListener("mousedown",ev=>{if(!ev.target.closest("button,select,input,summary"))focus=x.dataset.el;m.querySelectorAll(".el.focus").forEach(y=>y.classList.remove("focus"));x.classList.add("focus")}));
- const fr=document.getElementById("fr");if(fr){fr.focus();fr.onkeydown=ev=>{if(ev.key==="Enter"){ev.preventDefault();m.querySelector('[data-a="fullok"]').click()}}}
+ const fr=document.getElementById("fr");if(fr){fr.focus();fr.onkeydown=ev=>{if(ev.key==="Enter"){ev.preventDefault();m.querySelector('[data-a="fullok"]').click()}else if(/^[1-9]$/.test(ev.key)&&REASONS[+ev.key-1]){ev.preventDefault();fr.value=REASONS[+ev.key-1];m.querySelector('[data-a="fullok"]').click()}}}
  m.querySelectorAll(".mark").forEach(s=>s.onclick=()=>{edit.marks.splice(+s.dataset.i,1);render()});
  const er=document.getElementById("er"),en=document.getElementById("en");if(er)er.onchange=()=>edit.reason=er.value;if(en)en.oninput=()=>edit.note=en.value;
  m.querySelectorAll(".row").forEach(r=>r.onclick=()=>{openRow=r.dataset.row;focus=openRow;render()});
@@ -999,7 +1087,7 @@ function undecidedKey(k){const [fi,id]=splitKey(k);return !DOCS[fi].decisions[id
 // ---- Section views: every file of the folder at once -------------------------------------------
 // review: undecided, scored 7+ (or not yet scored) | low: undecided, scored below 7
 // repeats: undecided, same text as a decided element | done: every decided element
-const SECTIONS={review:"To review",low:"Below 7 (no decision)",repeats:"Repeats",conflicts:"Conflicts",done:"Reviewed"};
+const SECTIONS={review:"To review",low:"Below "+MIN+" (no decision)",repeats:"Repeats",conflicts:"Conflicts",done:"Reviewed"};
 const DUP="Duplicate – already in the Personal Data Report";
 function di(fid,file){return DOCS.findIndex(d=>(d.fid||"")===(fid||"")&&d.name===file)}
 function sc(el){const s=el.score;return s&&s.score!=null?s.score:null}
@@ -1010,7 +1098,7 @@ function counts(){const c={};for(const k in SECTIONS)c[k]=k==="conflicts"?CONF.l
 function chipRow(name,values,sel,label){return `<div class="chips"><span class="t">${label}</span>${values.map(v=>`<button class="chip ${sel.has(String(v))?"on":""}" data-chip="${name}" data-v="${v}">${v==="none"?"not scored":v}</button>`).join("")}<button class="chip clear" data-chip="${name}" data-v="*">all</button></div>`}
 function pairHTML(x,key,grp){const txt=x=>x.el.parts.map(([a,b])=>x.d.text.slice(a,b)).join(" ");
 const r=x.rep;
-   const w=r.was||{},ms=s=>s==null?`<span class="sc lo">Model –</span>`:`<span class="sc ${s>=7?"hi":s>=5?"mid":"lo"}">Model ${s}</span>`;
+   const w=r.was||{},ms=s=>s==null?`<span class="sc lo">Model –</span>`:`<span class="sc ${s>=MIN?"hi":s>=5?"mid":"lo"}">Model ${s}</span>`;
    return `<div class="el pair ${focus===key?"focus":""}" data-key="${key}" data-el="${key}">
     <div class="side was"><div class="ph">✓ Your earlier decision ${ms(w.score)}<button class="btn sm ctxb" data-ctx2="${esc(r.from.split("/")[0])}|${esc(r.from.split("/").slice(1).join("/"))}|${r.element}">Context</button></div>
      <div class="t"><span class="badge ${w.decision}">${LABEL[w.decision]||""}</span>${(w.reasons||[]).length?" "+esc(w.reasons.join(", ")):""} · ${esc(w.reviewer||"")} ${esc((w.ts||"").slice(0,16).replace("T"," "))}${w.copied?" (copied)":""}<br>in ${esc(r.from)}</div>
@@ -1057,19 +1145,19 @@ function renderSection(){const m=document.getElementById("main"),who=[];if(MODE=
  if(qq)items=items.filter(x=>txt(x).toLowerCase().includes(qq)||x.d.name.toLowerCase().includes(qq));
  if(MODE==="review"){const vals=[...new Set(pool("review").map(x=>sc(x.el)===null?"none":String(sc(x.el))))].sort();h+=chipRow("rs",vals,F.rs,"Model score");if(F.rs.size)items=items.filter(x=>F.rs.has(sc(x.el)===null?"none":String(sc(x.el))))}
  if(MODE==="low"){const vals=[...new Set(pool("low").map(x=>String(sc(x.el))))].sort((a,b)=>a-b);h+=chipRow("ls",vals,F.ls,"Model score");if(F.ls.size)items=items.filter(x=>F.ls.has(String(sc(x.el))));
-  h+=`<p class="t">Scored below 7: no decision needed and nothing goes in the report. Extract one if it should be in.</p>`}
+  h+=`<p class="t">Scored below ${MIN}: no decision needed and nothing goes in the report. Extract one if it should be in.</p>`}
  if(MODE==="done"){const all=pool("done"),dv=[...new Set(all.map(x=>x.dec.decision))],rv=[...new Set(all.flatMap(x=>x.dec.redactions.map(r=>r.reason)))];
   h+=`<div class="chips"><span class="t">Decision</span>${dv.map(v=>`<button class="chip ${F.dd.has(v)?"on":""}" data-chip="dd" data-v="${v}">${LABEL[v]}</button>`).join("")}<button class="chip clear" data-chip="dd" data-v="*">all</button></div>`;
   h+=`<div class="chips"><span class="t">In the report</span>${["yes","no"].map(v=>`<button class="chip ${F.ir.has(v)?"on":""}" data-chip="ir" data-v="${v}">${v==="yes"?"included":"not included"}</button>`).join("")}<span class="t" style="margin-left:12px">How</span>${["by hand","copied"].map(v=>`<button class="chip ${F.hw.has(v)?"on":""}" data-chip="hw" data-v="${v}">${v==="copied"?"copied from a repeat":"decided by hand"}</button>`).join("")}<button class="chip clear" data-chip="ir,hw" data-v="*">all</button></div>`;
-  h+=`<div class="chips"><span class="t">Reason</span><select id="rsel" class="btn"><option value="">any</option>${rv.map(v=>`<option ${F.rr===v?"selected":""}>${esc(v)}</option>`).join("")}</select><span class="t" style="margin-left:12px">Model score</span><select id="ssel" class="btn"><option value="">any</option>${["7+","below 7","not scored"].map(v=>`<option ${F.sb===v?"selected":""}>${v}</option>`).join("")}</select></div>`;
+  h+=`<div class="chips"><span class="t">Reason</span><select id="rsel" class="btn"><option value="">any</option>${rv.map(v=>`<option ${F.rr===v?"selected":""}>${esc(v)}</option>`).join("")}</select><span class="t" style="margin-left:12px">Model score</span><select id="ssel" class="btn"><option value="">any</option>${[MIN+"+","below "+MIN,"not scored"].map(v=>`<option ${F.sb===v?"selected":""}>${v}</option>`).join("")}</select></div>`;
   if(F.dd.size)items=items.filter(x=>F.dd.has(x.dec.decision));
   if(F.ir.size)items=items.filter(x=>F.ir.has(x.dec.decision==="redact_full"?"no":"yes"));
   if(F.hw.size)items=items.filter(x=>F.hw.has(x.dec.copied_from?"copied":"by hand"));
   if(F.rr)items=items.filter(x=>x.dec.redactions.some(r=>r.reason===F.rr));
-  if(F.sb)items=items.filter(x=>{const s=sc(x.el);return F.sb==="7+"?s!==null&&s>=7:F.sb==="below 7"?s!==null&&s<7:s===null})}
+  if(F.sb)items=items.filter(x=>{const s=sc(x.el);return F.sb===MIN+"+"?s!==null&&s>=MIN:F.sb==="below "+MIN?s!==null&&s<MIN:s===null})}
  if(MODE==="repeats"&&items.length)h+=`<div class="bar"><button class="btn primary" id="confirmall">Confirm all ${items.length} shown</button><span class="t">Your earlier decision is on the left, the repeat to decide on the right. Confirm to record the same outcome under your name; “Not a match” moves it back to be reviewed.</span></div>`;
  if(MODE==="review"){const top=items[0];
-  h+=items.length?`<div class="nextbar"><div><b>Next step:</b> decide ${items.length} paragraph(s), most important first${top&&sc(top.el)!=null?` (highest score ${sc(top.el)})`:""}. Red = 9–10, orange = 8, amber = 7, grey = not scored.</div><button class="btn primary" id="gofirst">Start with the most important →</button></div>`
+  h+=items.length?`<div class="nextbar"><div><b>Next step:</b> decide ${items.length} paragraph(s), most important first${top&&sc(top.el)!=null?` (highest score ${sc(top.el)})`:""}. Red = 9–10, orange = 8, amber = ${MIN<7?MIN+"–7":"7"}, grey = not scored.</div><button class="btn primary" id="gofirst">Start with the most important →</button></div><div class="legend"><span class="keys"><kbd>E</kbd> extract · <kbd>L</kbd> leave out, then <kbd>1</kbd>–<kbd>9</kbd> for the reason · <kbd>⇧L</kbd> leave out, same reason as last · <kbd>P</kbd> leave part out · <kbd>W</kbd> / <kbd>X</kbd> whole item in / out · <kbd>C</kbd> context · <kbd>↓</kbd><kbd>↑</kbd> move</span></div>`
    :`<div class="nextbar done"><b>✓ Nothing left to review.</b> ${counts().repeats?"Next: confirm the repeats.":counts().conflicts?"Next: resolve the conflicts.":`Next: <a href="${location.pathname.split("/toolbox/")[0]}/report/">build the report</a>.`}</div>`}
  h+=`<p class="t">${items.length} element(s)</p>`;
  let last=null;
@@ -1085,7 +1173,7 @@ function renderSection(){const m=document.getElementById("main"),who=[];if(MODE=
   if(MODE==="done"&&openRow!==key&&focus!==key){h+=row(x.d,x.el).replace(`data-row="${x.el.id}"`,`data-row="${key}"`).replace("</div>",`${x.dec.copied_from?`<span class="t">copied from ${esc(x.dec.copied_from.split("#")[0])}</span>`:""}</div>`);continue}
   h+=cardHTML(x.d,x.el,key,who)}
  if(items.length>300)h+=`<p class="t">Showing the first 300; filter to see the rest.</p>`;
- if(!items.length)h+=`<p class="alldone">${MODE==="review"?"Nothing left to review at 7+.":MODE==="repeats"?"No repeats waiting.":"Nothing here."}</p>`;
+ if(!items.length)h+=`<p class="alldone">${MODE==="review"?"Nothing left to review at "+MIN+"+.":MODE==="repeats"?"No repeats waiting.":"Nothing here."}</p>`;
  m.innerHTML=h;
  const qi=document.getElementById("q");qi.oninput=()=>{q=qi.value;const p=qi.selectionStart;render();const n=document.getElementById("q");n.focus();n.setSelectionRange(p,p)};
  m.querySelectorAll("[data-chip]").forEach(b=>b.onclick=()=>{for(const n of b.dataset.chip.split(",")){const s=F[n];if(b.dataset.v==="*")s.clear();else if(n===b.dataset.chip)s.has(b.dataset.v)?s.delete(b.dataset.v):s.add(b.dataset.v)}render()});
@@ -1100,7 +1188,8 @@ function renderSection(){const m=document.getElementById("main"),who=[];if(MODE=
   await applyRepeats([{fid:DOCS[fi].fid,file:DOCS[fi].name,element:id}])});
  const ca=document.getElementById("confirmall");if(ca)ca.onclick=async()=>{ca.disabled=true;await applyRepeats(items.map(x=>({fid:x.d.fid,file:x.d.name,element:x.el.id})))};
  const gf=document.getElementById("gofirst");if(gf)gf.onclick=()=>{const first=m.querySelector(".el");if(first)goTo(first.dataset.el)};
- wire(m);nav()}
+ wire(m);nav();
+ if(MODE!=="done"){const v=visibleIds();if(!v.includes(focus)){focus=v.find(undecidedKey)||null;const x=focus&&m.querySelector(`.el[data-el="${CSS.escape(focus)}"]`);if(x)x.classList.add("focus")}}}
 async function applyRepeats(only){const by={};for(const o of only){(by[o.fid||""]=by[o.fid||""]||[]).push({file:o.file,element:o.element})}let n=0,bad=0;
  for(const fid in by){const r=await fetch((fid&&fid!==PAGE_FID?"../"+fid+"/":"")+"api/apply-repeats",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify({only:by[fid]})});const j=await r.json();if(!r.ok){toast(j.error||"Not applied");return}n+=j.applied;bad+=j.failed}
  toast(`Recorded ${n} decision(s)${bad?`, ${bad} need deciding by hand`:""}`);await load(true);nav()}
@@ -1136,7 +1225,7 @@ async function decideFile(fi,decision,reason){const d=DOCS[fi],n=undecidedOf(d).
  const j=await r.json();if(!r.ok){toast(j.error||"Not saved");return}toast(`Recorded ${j.decided} decision(s)`);await load(true);nav()}
 function wireWI(m){m.querySelectorAll("[data-wi]").forEach(b=>b.onclick=()=>{const w=b.closest("[data-wfi]");decideFile(+w.dataset.wfi,b.dataset.wi,w.querySelector("[data-wr]").value)})}
 
-function prio(el,dec){if(dec)return "";const s=el.score&&el.score.score;return s==null?"p-un":s>=9?"p-hi":s>=8?"p-mid":s>=7?"p-low":""}
+function prio(el,dec){if(dec)return "";const s=el.score&&el.score.score;return s==null?"p-un":s>=9?"p-hi":s>=8?"p-mid":s>=MIN?"p-low":""}
 function light(k,n){if(!n)return `<span class="lt ok">✓</span>`;return `<span class="lt ${k==="repeats"?"amb":k==="low"||k==="done"?"":"red"}">${n}</span>`}
 function visibleIds(){return [...document.querySelectorAll("#main .el")].map(x=>x.dataset.el)}
 function goTo(id){if(!id)return;focus=id;document.querySelectorAll(".el.focus").forEach(y=>y.classList.remove("focus"));const x=document.querySelector(`.el[data-el="${id}"]`);if(x){x.classList.add("focus");x.scrollIntoView({block:"center",behavior:"smooth"})}}
@@ -1148,10 +1237,16 @@ document.addEventListener("keydown",ev=>{if(ev.metaKey||ev.ctrlKey||ev.altKey)re
  if(t.closest&&t.closest("input,select,textarea"))return;if(edit||split||full)return;
  const ids=visibleIds();if(!ids.length)return;let i=ids.indexOf(focus);
  const k=ev.key.toLowerCase();
+ if(i>=0&&ev.key==="L"&&ev.shiftKey){ev.preventDefault();quickLeave(focus);return}
+ if(i>=0&&(k==="w"||k==="x")){ev.preventDefault();const [fi]=splitKey(focus);if(undecidedOf(DOCS[fi]).length)decideFile(fi,k==="w"?"release":"redact_full",k==="w"?"":NOT_REQ);return}
+ if(i>=0&&k==="c"){ev.preventDefault();const [fi,id]=splitKey(focus);showContext(DOCS[fi],id);return}
  if(k==="arrowdown"||k==="j"){ev.preventDefault();goTo(ids[Math.min(i+1,ids.length-1)]||ids[0])}
  else if(k==="arrowup"||k==="k"){ev.preventDefault();goTo(ids[Math.max(i-1,0)])}
  else if(["a","e","r","l","p"].includes(k)){if(i<0){goTo(ids.find(undecidedKey)||ids[0]);return}ev.preventDefault();
   const b=document.querySelector(`.el[data-el="${focus}"] [data-a="${{a:"approve",e:"approve",r:"full",l:"full",p:"partial"}[k]}"]`);if(b)b.click()}});
+// Shift+L: leave the focused element out for the same reason as the last one, without the form.
+async function quickLeave(key){const [fi,id]=splitKey(key);if(DOCS[fi].decisions[id])return advance(key);cur=fi;
+ if(await act({action:"decide",element:id,decision:"redact_full",reason:lastReason,note:""})){toast("Left out: "+lastReason);await load(true);advance(key)}}
 function offset(node,off){const el=(node.nodeType===3?node.parentElement:node).closest("[data-s]");if(!el)return null;let n=0;const w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);let t;while((t=w.nextNode())){if(t===node)return +el.dataset.s+n+off;n+=t.textContent.length}return +el.dataset.s+(node.nodeType===3?off:n)}
 document.addEventListener("click",ev=>{if(!split)return;const box=document.querySelector(`.el[data-el="${split.el}"] .txt`);if(!box||!box.contains(ev.target))return;
  let node,off;if(document.caretRangeFromPoint){const r=document.caretRangeFromPoint(ev.clientX,ev.clientY);if(!r)return;node=r.startContainer;off=r.startOffset}else if(document.caretPositionFromPoint){const p=document.caretPositionFromPoint(ev.clientX,ev.clientY);if(!p)return;node=p.offsetNode;off=p.offset}else return;

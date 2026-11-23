@@ -115,7 +115,7 @@ def index():
     n_conf = len(markup.conflicts([(fid, docs) for fid, (path, docs) in loaded.items() if str(path) not in skip]))
     total = {k: sum(r["sections"][k] for r in live) for k in ("review", "low", "repeats", "done")} if live else None
     return render_template("redaction/index.html", rows=rows, total=total, n_conf=n_conf, intake=_intake_counts(),
-                           error=request.args.get("error", ""))
+                           min_score=markup.REVIEW_MIN_SCORE, error=request.args.get("error", ""))
 
 
 def _intake_counts() -> dict:
@@ -249,8 +249,15 @@ def page(fid):
            f'<a href="{url_for(".all_review")}">Personal Data Reviewer</a> · <b>all of {html.escape(request_ref)}</b> · <a href="{url_for(".index")}">Folders and intake</a>'
            f'{(" · <a href=" + chr(34) + url_for("review.report_page") + "#preview" + chr(34) + ">← Report preview</a>") if s.case_bound else ""}'
            f'{" · <b>free-standing: not audit-logged</b>" if not s.case_bound else ""}</div>')
-    return markup.APP_PAGE.replace("__REASONS__", json.dumps(markup.REASONS)).replace("<head>", head, 1).replace(
-        "<body>", bar, 1)
+    names: list[str] = [subject] if subject else []
+    if s.config_path:
+        from dsar.config import load_config
+        try:
+            p = load_config(s.config_path).subject
+            names += [p.name, *p.aliases, *p.emails]
+        except Exception:                                       # noqa: BLE001 - names only highlight; never block the page
+            pass
+    return markup.app_page(names).replace("<head>", head, 1).replace("<body>", bar, 1)
 
 
 def _repeats(f: markup.Folder, docs: list[dict]) -> dict:
