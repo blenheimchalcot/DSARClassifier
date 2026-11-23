@@ -1326,8 +1326,12 @@ def markup_serve_cmd(folder: str, reviewer: str, subject: str, port: int, no_bro
 @click.argument("folder", type=click.Path(exists=True, file_okay=False))
 @click.option("--config", "config_path", default="config.yaml", show_default=True)
 @click.option("--system-prompt", default="claude_strict.md", show_default=True)
+@click.option("--prefilter-min-elements", default=50, show_default=True,
+              help="In items with more elements than this, send only elements naming the subject to the model; "
+                   "record the rest as score 0 (alias pre-filter). 0 sends everything.")
 @_audited("markup score")
-def markup_score_cmd(folder: str, config_path: str, system_prompt: str, run: audit.Run) -> None:
+def markup_score_cmd(folder: str, config_path: str, system_prompt: str, prefilter_min_elements: int,
+                     run: audit.Run) -> None:
     """Suggest a 0-10 score for every element in FOLDER with the local model (a hint, never a decision)."""
     from dsar import classify
     from dsar.toolbox.redaction import markup
@@ -1344,11 +1348,12 @@ def markup_score_cmd(folder: str, config_path: str, system_prompt: str, run: aud
     result = asyncio.run(markup.score_folder(
         Path(folder), system_prompt=prompt, model=cfg.model.default, subject_name=cfg.subject.name,
         max_tokens=cfg.model.max_tokens, temperature=cfg.model.temperature, concurrency=cfg.model.concurrency,
-        progress=progress))
+        progress=progress, matcher=build_matcher(cfg.subject), prefilter_min_elements=prefilter_min_elements))
     run.data.update(result)
     run.hash_file("markup_scores", Path(folder) / markup.SCORES_NAME)
     click.echo(f"Scored {result['scored']} of {result['elements']} element(s); {result['failed']} failed; "
-               f"{result['already_scored']} already scored.")
+               f"{result['already_scored']} already scored; {result['prefiltered']} not sent to the model "
+               f"(do not name the subject, in items over {prefilter_min_elements} elements).")
 
 
 @main.command(name="serve")

@@ -267,3 +267,43 @@ def test_only_elements_scored_7_or_more_need_a_decision(tmp_path):
     assert [el["below"] for el in doc["elements"]] == [False, True, False]
     assert markup.undecided_count(doc) == 2                    # the 8 and the unscored one; the 2 needs nothing
     assert markup.extracts([doc]) == []                         # and nothing below 7 goes in by itself
+
+
+def test_large_items_send_only_lines_naming_the_subject_to_the_model(tmp_path, monkeypatch):
+    import asyncio
+    from dsar import classify
+    from dsar.chunking.prefilter import build_matcher
+    from dsar.config import SubjectProfile
+
+    folder = tmp_path / "f"
+    folder.mkdir()
+    report = "\n\n".join([f"Learner {i} | On programme" for i in range(60)] + ["Sam Sample | Gateway"]) + "\n"
+    (folder / "01_report.txt").write_text(report)
+    (folder / "02_note.txt").write_text("A short note.\n\nNothing about anyone.\n")
+    sent = []
+
+    class Resp:
+        def __init__(self, text): self.text = text
+        def raise_for_status(self): pass
+        def json(self): return {"message": {"content": "7 | Names the subject | Sam Sample"}}
+
+    class Client:
+        def __init__(self, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): pass
+        async def post(self, url, json): sent.append(json["messages"][-1]["content"]); return Resp("")
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", Client)
+    monkeypatch.setattr(classify, "parse_response", lambda c: classify.ParsedResponse(7, "Names the subject", "Sam Sample", None, c))
+    matcher = build_matcher(SubjectProfile(name="Sam Sample", aliases=["Sam Sample"], emails=[]))
+    result = asyncio.run(markup.score_folder(folder, system_prompt="p", model="m", subject_name="Sam Sample",
+                                             max_tokens=10, temperature=0, concurrency=1, matcher=matcher,
+                                             prefilter_min_elements=50))
+    assert result["prefiltered"] == 60                          # the other learners' lines
+    assert len(sent) == 3                                       # Sam's line + both lines of the small note
+    assert any("Sam Sample | Gateway" in s for s in sent)
+    rows = [json.loads(l) for l in (folder / markup.SCORES_NAME).read_text().splitlines()]
+    assert sum(r.get("method") == "alias-prefilter" and r["score"] == 0 for r in rows) == 60
+    doc = next(d for d in markup.Folder(folder, "R", None).docs() if d["name"] == "01_report.txt")
+    assert markup.undecided_count(doc) == 1                     # only Sam's line needs a decision

@@ -669,9 +669,20 @@ def element_text(text: str, el: dict) -> str:
     return " ".join(text[a:b].strip() for a, b in el["parts"])
 
 
+PREFILTER_DESCRIPTION = ("Not sent to the model: does not name the subject (a line of a large report-style "
+                         "item; alias pre-filter)")
+
+
 async def score_folder(folder: Path, *, system_prompt: str, model: str, subject_name: str, max_tokens: int,
-                       temperature: float, concurrency: int, progress=None) -> dict:
-    """Score every element not yet scored with this model and prompt; append to SCORES_NAME."""
+                       temperature: float, concurrency: int, progress=None, matcher=None,
+                       prefilter_min_elements: int = 0) -> dict:
+    """Score every element not yet scored with this model and prompt; append to SCORES_NAME.
+
+    With a matcher and prefilter_min_elements, an item with more elements than that (a
+    report or table, e.g. a weekly report email of 600 learner rows) sends only its
+    elements that name the subject to the model; the rest are recorded as score 0 with
+    method "alias-prefilter", the same rule ingest uses to choose what to classify.
+    """
     import asyncio
 
     import httpx
@@ -688,12 +699,25 @@ async def score_folder(folder: Path, *, system_prompt: str, model: str, subject_
                 r = json.loads(ln)
                 if r.get("model") == model and r.get("prompt_sha256") == prompt_sha and r.get("score") is not None:
                     done.add((r["file"], r["sha256"], json.dumps(r["span"])))
-    todo = []
+    todo, prefiltered = [], []
     for d in f.docs():
-        for el in d["elements"]:
-            if (d["name"], d["sha256"], json.dumps(el["parts"])) not in done and element_text(d["text"], el).strip():
-                label = f"{el['who']} at {el['t']}" if el["who"] else el["label"]
-                todo.append((d["name"], d["sha256"], el["parts"], label, element_text(d["text"], el)))
+        elements = [el for el in d["elements"] if element_text(d["text"], el).strip()]
+        large = bool(matcher) and prefilter_min_elements > 0 and len(elements) > prefilter_min_elements
+        for el in elements:
+            if (d["name"], d["sha256"], json.dumps(el["parts"])) in done:
+                continue
+            text = element_text(d["text"], el)
+            if large and not matcher.matches(text):
+                prefiltered.append({"file": d["name"], "sha256": d["sha256"], "span": el["parts"], "score": 0,
+                                    "description": PREFILTER_DESCRIPTION, "evidence": None, "special": None,
+                                    "model": model, "prompt_sha256": prompt_sha, "method": "alias-prefilter",
+                                    "ts": _now()})
+                continue
+            label = f"{el['who']} at {el['t']}" if el["who"] else el["label"]
+            todo.append((d["name"], d["sha256"], el["parts"], label, text))
+    if prefiltered:
+        with path.open("a", encoding="utf-8") as fh:
+            fh.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in prefiltered)
     sem, lock, counts = asyncio.Semaphore(max(1, concurrency)), threading.Lock(), Counter()
 
     async def one(client, item):
@@ -723,6 +747,7 @@ async def score_folder(folder: Path, *, system_prompt: str, model: str, subject_
     async with httpx.AsyncClient(base_url=classify.ollama_url(), timeout=300.0) as client:
         await asyncio.gather(*(one(client, item) for item in todo))
     return {"elements": len(todo), "already_scored": len(done), "scored": counts["scored"], "failed": counts["failed"],
+            "prefiltered": len(prefiltered), "prefilter_min_elements": prefilter_min_elements if matcher else 0,
             "prompt_sha256": prompt_sha, "model": model}
 
 
