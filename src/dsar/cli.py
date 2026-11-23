@@ -25,6 +25,7 @@ from dsar.chunking import (
     substrate_hold,
     teams_chat,
 )
+from dsar.chunking.common import fit_row
 from dsar.chunking.prefilter import build_matcher
 from dsar.classify import classify_all, load_system_prompt, ollama_info
 from dsar.config import load_config
@@ -333,6 +334,10 @@ def ingest(input_dir: Path | None, db_path: str | None, config_path: str, run: a
             # Free memory from any cyclic references the previous file left behind.
             if file_idx % 100 == 0:
                 gc.collect()
+            if sz == 0 and path.exists():
+                db.record_skipped(conn, str(path), "empty file (0 bytes): nothing to read")
+                counters["skipped_files"] += 1
+                continue
             try:
                 # ---- Purview-Exchange-specific paths (existing) ----
                 if ext == ".xlsx" or ext in spreadsheets.SUPPORTED_EXTS:
@@ -378,13 +383,16 @@ def ingest(input_dir: Path | None, db_path: str | None, config_path: str, run: a
                     counters["skipped_files"] += 1
                     continue
 
-                for chunk in stream:
-                    db.upsert_chunk(conn, chunk)
-                    counters[chunk.source_type] = counters.get(chunk.source_type, 0) + 1
-                    if chunk.alias_matched:
-                        counters["alias_matched"] += 1
-                    written_since_commit += 1
-                    _maybe_commit()
+                for whole in stream:
+                    parts = ([whole] if whole.source_type not in ("spreadsheet_row", "csv_row")
+                             else fit_row(whole, cfg.chunking.max_chars, cfg.chunking.overlap_chars, matcher))
+                    for chunk in parts:
+                        db.upsert_chunk(conn, chunk)
+                        counters[chunk.source_type] = counters.get(chunk.source_type, 0) + 1
+                        if chunk.alias_matched:
+                            counters["alias_matched"] += 1
+                        written_since_commit += 1
+                        _maybe_commit()
             except Exception as exc:
                 db.record_skipped(conn, str(path), f"error: {exc}")
                 counters["skipped_files"] += 1

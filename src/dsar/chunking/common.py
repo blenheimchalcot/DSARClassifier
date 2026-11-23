@@ -1,3 +1,4 @@
+import dataclasses
 import hashlib
 import re
 
@@ -71,3 +72,27 @@ def split_long(text: str, max_chars: int, overlap_chars: int) -> list[str]:
     if current:
         parts.append(current)
     return parts
+
+
+def fit_row(chunk, max_chars: int, overlap_chars: int, matcher) -> list:
+    """
+    Split a spreadsheet/CSV row chunk that is longer than max_chars into parts
+    the model can read whole (one huge row would otherwise be truncated). Each
+    part gets item_ref "<row>#p<n>"; a part is in scope only if it names the
+    subject itself. Every part is kept, so nothing is dropped.
+    """
+    if len(chunk.content) <= max_chars:
+        return [chunk]
+    pieces = split_long(chunk.content, max_chars, overlap_chars)
+    out = []
+    for n, piece in enumerate(pieces, start=1):
+        ref = f"{chunk.item_ref}#p{n}"
+        out.append(dataclasses.replace(
+            chunk,
+            chunk_id=hash_chunk_id(chunk.source_path, ref),
+            item_ref=ref,
+            content=piece,
+            metadata={**(chunk.metadata or {}), "part": n, "parts": len(pieces)},
+            alias_matched=bool(chunk.alias_matched and matcher.matches(piece)),
+        ))
+    return out

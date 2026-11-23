@@ -54,7 +54,9 @@ def extract(path: Path, matcher: AliasMatcher) -> Iterator[Chunk]:
     if not text.strip():
         return
     dialect = _sniff_dialect(text[:_SAMPLE_BYTES])
-    reader = csv.reader(io.StringIO(text), dialect=dialect)
+    # newline="" lets the csv module see the original line endings, so a line
+    # break inside a quoted cell (or an old Mac "\r") doesn't abort the file.
+    reader = csv.reader(io.StringIO(text, newline=""), dialect=dialect)
 
     try:
         header = next(reader)
