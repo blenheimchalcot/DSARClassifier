@@ -154,6 +154,7 @@ def _stream_sheet(
     row_iter: Iterable,
     path: Path,
     matcher: AliasMatcher,
+    extra: dict | None = None,
 ) -> Iterator[Chunk]:
     """
     Common emit path. Takes an iterable that yields rows one at a time;
@@ -181,7 +182,7 @@ def _stream_sheet(
         item_ref=f"{sheet_name}!structure",
         subject=f"{path.stem} / {sheet_name}",
         content=structural,
-        metadata={"sheet": sheet_name, "kind": "structure", "extension": path.suffix.lower()},
+        metadata={"sheet": sheet_name, "kind": "structure", "extension": path.suffix.lower(), **(extra or {})},
         alias_matched=False,
     )
 
@@ -206,7 +207,7 @@ def _stream_sheet(
             subject=f"{path.stem} / {sheet_name}",
             content=f"{header_text}\n{row_text}",
             metadata={"sheet": sheet_name, "row": row_idx, "kind": "row",
-                      "extension": path.suffix.lower()},
+                      "extension": path.suffix.lower(), **(extra or {})},
             alias_matched=True,
         )
 
@@ -256,14 +257,24 @@ def _extract_openpyxl(path: Path, matcher: AliasMatcher) -> Iterator[Chunk]:
 def _extract_xlrd(path: Path, matcher: AliasMatcher) -> Iterator[Chunk]:
     import xlrd  # lazy import
 
-    book = xlrd.open_workbook(str(path), on_demand=True)
+    extra = None
+    try:
+        book = xlrd.open_workbook(str(path), on_demand=True)
+    except xlrd.biffh.XLRDError as exc:
+        if "encrypted" not in str(exc).lower():
+            raise
+        # Protecting a sheet or the workbook structure makes Excel encrypt the
+        # .xls with its built-in password, which Excel then opens without
+        # asking. Try that password only; a real password still fails here.
+        book = xlrd.open_workbook(file_contents=_decrypt_default_password(path), on_demand=True)
+        extra = {"decrypted": "Excel default password (VelvetSweatshop)"}
     try:
         for sheet_name in book.sheet_names():
             sh = book.sheet_by_name(sheet_name)
             def _row_iter(sheet=sh):
                 for r in range(sheet.nrows):
                     yield tuple(sheet.row_values(r))
-            yield from _stream_sheet(sheet_name, _row_iter(), path, matcher)
+            yield from _stream_sheet(sheet_name, _row_iter(), path, matcher, extra)
             try:
                 book.unload_sheet(sheet_name)
             except Exception:
@@ -273,6 +284,21 @@ def _extract_xlrd(path: Path, matcher: AliasMatcher) -> Iterator[Chunk]:
             book.release_resources()
         except Exception:
             pass
+
+
+def _decrypt_default_password(path: Path) -> bytes:
+    import io
+    import msoffcrypto  # lazy import
+
+    with open(path, "rb") as fh:
+        office = msoffcrypto.OfficeFile(fh)
+        try:
+            office.load_key(password="VelvetSweatshop")
+            out = io.BytesIO()
+            office.decrypt(out)
+        except Exception as exc:
+            raise ValueError("Workbook is encrypted with a password other than Excel's default") from exc
+    return out.getvalue()
 
 
 def _extract_pyxlsb(path: Path, matcher: AliasMatcher) -> Iterator[Chunk]:

@@ -136,3 +136,33 @@ def test_xlsx_that_declares_a_wrong_dimension_is_read_in_full(tmp_path: Path):
             zout.writestr(item, data)
     rows = [c for c in spreadsheets.extract(bad, _matcher()) if c.alias_matched]
     assert len(rows) == 1 and rows[0].content == "Learner | Status\nEmma Banks | Gateway"
+
+
+def test_xls_with_excel_default_password_is_read_and_flagged(tmp_path: Path, monkeypatch):
+    import xlrd
+    from dsar.chunking import spreadsheets
+
+    class Sheet:
+        nrows = 2
+        def row_values(self, r):
+            return [["Learner", "Status"], ["Emma Banks", "Registered"]][r]
+
+    class Book:
+        def sheet_names(self): return ["Sheet1"]
+        def sheet_by_name(self, name): return Sheet()
+        def unload_sheet(self, name): pass
+        def release_resources(self): pass
+
+    def open_workbook(filename=None, file_contents=None, on_demand=False):
+        if file_contents is None:
+            raise xlrd.biffh.XLRDError("Workbook is encrypted")
+        assert file_contents == b"decrypted"
+        return Book()
+
+    monkeypatch.setattr(xlrd, "open_workbook", open_workbook)
+    monkeypatch.setattr(spreadsheets, "_decrypt_default_password", lambda p: b"decrypted")
+    p = tmp_path / "reg.xls"
+    p.write_bytes(b"\xd0\xcf\x11\xe0" + b"\0" * 508)
+    rows = [c for c in spreadsheets.extract(p, _matcher()) if c.alias_matched]
+    assert len(rows) == 1 and "Emma Banks" in rows[0].content
+    assert rows[0].metadata["decrypted"].startswith("Excel default password")
