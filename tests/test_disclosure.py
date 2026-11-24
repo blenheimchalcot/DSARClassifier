@@ -494,7 +494,8 @@ def test_unreviewed_items_are_brought_into_the_personal_data_reviewer(case, temp
     assert "section=review" in r.headers["Location"]
     folder = next((case / "output").glob(personal_data_report.STACK_PREFIX + "*_score5"))
     f = markup.Folder(folder, "Test Reviewer", None)
-    assert f.min_score == 0                                       # items below the review line: every paragraph is shown
+    assert f.min_score == markup.REVIEW_MIN_SCORE                 # a folder can't lower the review line
+    assert all(el["below"] for el in f.docs()[0]["elements"])     # unscored paragraphs take the item's score (5)
     with db.connect(case / "dsar.sqlite") as conn:
         assert disclosure.latest(conn)["c"]["decision"] == disclosure.IN_REVIEWER
         assert 5 not in disclosure.intake(conn)

@@ -207,6 +207,8 @@ class Folder:
                 self.min_score = int(json.loads(s.read_text(encoding="utf-8")).get("min_score", REVIEW_MIN_SCORE))
             except (ValueError, TypeError):
                 pass
+        # The operator reviews only material at or above the review line: a folder can't lower it.
+        self.min_score = max(self.min_score, REVIEW_MIN_SCORE)
 
     def files(self) -> list[Path]:
         return sorted(p for p in self.folder.glob("*.txt") if p.is_file())
@@ -271,7 +273,8 @@ class Folder:
                 return (p.name, st.st_size, st.st_mtime_ns)
             except FileNotFoundError:
                 return (p.name, None)
-        extra = [self.folder / n for n in (EVENTS_NAME, SCORES_NAME, SETTINGS_NAME)]
+        extra = [self.folder / n for n in (EVENTS_NAME, SCORES_NAME, SETTINGS_NAME, "stack_index.json")]
+        extra.append(self.folder.parent.parent / "dsar.sqlite")   # item scores
         return (self.min_score, tuple(sig(p) for p in self.files() + extra))
 
     def docs(self) -> list[dict]:
@@ -287,6 +290,8 @@ class Folder:
     def _docs(self) -> list[dict]:
         scores = self.scores()
         events_all = self.events.parsed()
+        from dsar import personal_data_report   # here, not at the top: it imports this module
+        items = personal_data_report.stack_item_scores(self.folder)
         out = []
         for p in self.files():
             text = p.read_text(encoding="utf-8", errors="replace")
@@ -297,7 +302,7 @@ class Folder:
             for el in doc["elements"]:
                 el["score"] = scores.get((p.name, sha, json.dumps(el["parts"])))
                 el["blank"] = is_blank(text, el)
-                el["below"] = below_threshold(el, self.min_score)
+                el["below"] = below_threshold(el, self.min_score, items.get(p.name))
             out.append({"name": p.name, "sha256": sha, "text": text, **doc, "stale": other})
         return out
 
@@ -445,11 +450,13 @@ def is_blank(text: str, el: dict) -> bool:
     return not re.search(r"\w", "".join(text[a:b] for a, b in el["parts"]))
 
 
-def below_threshold(el: dict, min_score: int = REVIEW_MIN_SCORE) -> bool:
+def below_threshold(el: dict, min_score: int = REVIEW_MIN_SCORE, item_score: int | None = None) -> bool:
     """Scored by the model, below the review threshold: needs no decision and stays out of the report.
-    An element not yet scored (or the model gave no number) still needs a decision."""
-    s = el.get("score") or {}
-    return s.get("score") is not None and s["score"] < min_score
+    A paragraph the model hasn't scored takes its item's score; with neither, it still needs a decision."""
+    s = (el.get("score") or {}).get("score")
+    if s is None:
+        s = item_score
+    return s is not None and s < min_score
 
 
 def section_counts(docs: list[dict], repeats: dict[str, dict]) -> dict[str, int]:
