@@ -358,7 +358,7 @@ def _item_scores(folder: Path, names: list[str]) -> list[dict | None]:
     """For a review stack: each file's item as classified (model score, reason, evidence), from the case database."""
     import sqlite3
 
-    from dsar import evidence, personal_data_report
+    from dsar import evidence, personal_data_report, sources
     idx = folder / personal_data_report.STACK_INDEX
     db_path = folder.parent.parent / "dsar.sqlite"
     if not idx.is_file() or not db_path.is_file():
@@ -366,6 +366,7 @@ def _item_scores(folder: Path, names: list[str]) -> list[dict | None]:
     index = json.loads(idx.read_text(encoding="utf-8"))
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
+        origin = sources.for_chunks(conn, [v.get("chunk_id") for v in index.values() if v.get("chunk_id")])
         out = []
         for name in names:
             cid = (index.get(name) or {}).get("chunk_id")
@@ -373,7 +374,8 @@ def _item_scores(folder: Path, names: list[str]) -> list[dict | None]:
                                "LEFT JOIN classifications cl ON cl.chunk_id = c.chunk_id WHERE c.chunk_id = ?",
                                (cid,)).fetchone() if cid else None
             out.append({"chunk_id": cid, "score": row[0], "reason": row[1] or "",
-                        "evidence": row[2] or "", "evidence_check": evidence.verify(row[0], row[2], row[3], row[4])}
+                        "evidence": row[2] or "", "evidence_check": evidence.verify(row[0], row[2], row[3], row[4]),
+                        **origin.get(cid, {})}
                        if row else None)
         return out
     finally:

@@ -169,6 +169,12 @@ dsar markup serve <folder> --reviewer "Your Name" --subject <subject first name>
 
 ### Using it
 
+- **Review view and its filters.** A bar at the top narrows every paragraph in the review. Each chip shows how many paragraphs match.
+  - **DSAR classification:** *7 and above* (the default), *6 and below*, *Unknown*. A paragraph's own model score is used; if it has none, its item's score is used. *Unknown* means neither was scored.
+  - **Show reviewed:** off by default. Turn it on to see paragraphs already decided alongside the open ones.
+  - **Collection:** each `dsar ingest` run is one collection, named by its start time and its main provenance label, e.g. *23 Nov 18:36 · provided by Avado Assessments team*.
+  - **Source:** Purview Email, Purview Teams, Purview SharePoint, Purview OneDrive, Ad hoc files, Database extract, Live platform connection, Purview metadata, Other. Declare it per file with `source:` on a `provenance:` rule in config.yaml (then run `dsar provenance`). Without one, it is worked out from Purview's workload and URL and the path under `input/`.
+
 - **Elements:** each speaker turn in a Call AI transcript, plus the meeting details, and each header block and paragraph in any other file.
 - **Decisions:** for each element, **Approve** (release as it is), **Redact all** (choose a reason) or **Redact part** (select the passages to redact, each with a reason, then **Save**). Keys: `A`, `R`, `P`, `↓`/`↑` to move, `Enter` to confirm, `Esc` to cancel. Decided elements fold into the **Processed** bar at the top; open it to review or change them.
 - **Original / Redacted** switches between the text with redactions struck through, and the release view with black bars.
