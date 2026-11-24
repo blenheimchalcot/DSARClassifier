@@ -519,7 +519,7 @@ def test_go_to_review_brings_unreviewed_items_in_and_opens_the_reviewer(case, te
     page = c.get("/").get_data(as_text=True)
     assert 'action="/toolbox/redaction/review-due"' in page and "Go to review" in page
     r = c.post("/toolbox/redaction/review-due", data={"csrf": c.csrf})
-    assert "/toolbox/redaction/all/" in r.headers["Location"]
+    assert "/toolbox/redaction/f/" in r.headers["Location"] and "file=" in r.headers["Location"]   # opens the item
     with db.connect(case / "dsar.sqlite") as conn:
         assert all(disclosure.latest(conn)[cid]["decision"] == disclosure.IN_REVIEWER for cid in due)
         assert not [s for s in disclosure.intake(conn) if s >= disclosure.MIN_SCORE]

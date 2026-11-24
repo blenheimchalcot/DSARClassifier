@@ -164,6 +164,7 @@ def review_due():
     with db.connect(fam.review_dir / "dsar.sqlite") as conn:
         db.init_schema(conn)
         due = {k: v for k, v in disclosure.intake(conn).items() if k >= markup.REVIEW_MIN_SCORE}
+        first = None
         for score, ids in due.items():
             result = personal_data_report.send_to_reviewer(conn, fam.review_output, ids, records.reviewer(),
                                                            label=f"score{score}")
@@ -171,6 +172,10 @@ def review_due():
                      "request": fam.main_ref, "via": "Go to review"}
             for out in fam.logs(s.output_dir):
                 audit.AuditLog(out).append("review", "review intake", entry)
+            if first is None and result["files"]:
+                first = (Path(result["folder"]), result["files"][0])
+    if first:      # open the (highest-scored) item just brought in, whole
+        return redirect(url_for(".page", fid=_fid(first[0]), file=first[1], all=1))
     return redirect(url_for(".all_review", section="review"))
 
 
