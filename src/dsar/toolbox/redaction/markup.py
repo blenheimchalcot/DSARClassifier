@@ -1157,8 +1157,8 @@ function renderSection(){const m=document.getElementById("main"),who=[];if(MODE=
  const byF={};for(const x of items){const n=x.d.fname||"this folder";byF[n]=byF[n]||{items:new Set(),n:0};byF[n].items.add(rk(x.d));byF[n].n++}
  const nItems=new Set(items.map(x=>rk(x.d))).size;
  let h=MODE==="review"?filterBar():"";
- if(MODE!=="review")h+=`<div class="scope"><b>${SECTIONS[MODE]}: ${items.length} paragraph(s) in ${nItems} item(s)</b>${Object.keys(byF).length?" — "+Object.entries(byF).map(([k,v])=>`${esc(k)}: ${v.items.size} item(s), ${v.n} paragraph(s)`).join(" · "):""}</div>
- <div class="bar"><b style="font-size:16px">${SECTIONS[MODE]}</b><span class="t">${MODE==="review"?`${items.filter(x=>!x.dec).length} to decide · ${new Set(items.map(x=>rk(x.d))).size} item(s) · highest score first`:"everything in this review, across all folders"}</span><input type="search" id="q" placeholder="Search…" value="${esc(q)}"></div>`;
+ if(MODE!=="review")h+=`<div class="scope"><b>${SECTIONS[MODE]}: ${items.length} paragraph(s) in ${nItems} item(s)</b>${Object.keys(byF).length?" — "+Object.entries(byF).map(([k,v])=>`${esc(k)}: ${v.items.size} item(s), ${v.n} paragraph(s)`).join(" · "):""}</div>`;
+ h+=`<div class="bar"><b style="font-size:16px">${SECTIONS[MODE]}</b><span class="t">${MODE==="review"?`${items.filter(x=>!x.dec).length} to decide · ${new Set(items.map(x=>rk(x.d))).size} item(s) · highest score first`:"everything in this review, across all folders"}</span><input type="search" id="q" placeholder="Search…" value="${esc(q)}"></div>`;
  const fname=d=>(d.folder||"").split(" › ").pop();
  if(MODE!=="review"){const fv=[...new Set(pool(MODE).map(x=>fname(x.d)))].filter(Boolean).sort();if(fv.length>1){h+=`<div class="chips"><span class="t">Folder</span>${fv.map(v=>`<button class="chip ${F.fd.has(v)?"on":""}" data-chip="fd" data-v="${esc(v)}">${esc(v)} (${pool(MODE).filter(x=>fname(x.d)===v).length})</button>`).join("")}<button class="chip clear" data-chip="fd" data-v="*">all</button></div>`}
   if(F.fd.size)items=items.filter(x=>F.fd.has(fname(x.d)))}
