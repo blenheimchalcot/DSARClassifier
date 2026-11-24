@@ -169,6 +169,7 @@ dsar markup serve <folder> --reviewer "Your Name" --subject <subject first name>
 
 ### Using it
 
+- **Layout.** There's no sidebar. A strip at the top holds **Repeats** and **Conflicts**, each highlighted while there's work in it; both must be cleared before the report. Once they're clear, **Build report →** appears. Click an item's heading in the list to read the whole item, then **← Back to review**.
 - **Review view and its filters.** A bar at the top narrows every paragraph in the review. Each chip shows how many paragraphs match.
   - **DSAR classification:** *7 and above* (the default), *6 and below*, *Unknown*. A paragraph's own model score is used; if it has none, its item's score is used. *Unknown* means neither was scored.
   - **Show reviewed:** off by default. Turn it on to see paragraphs already decided alongside the open ones.
