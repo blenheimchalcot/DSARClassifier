@@ -274,7 +274,7 @@ def test_release_checklist_deadline_and_confirmations_are_logged_in_the_main_cas
     monkeypatch.delenv("DSAR_CASE_DOCS_ROOT", raising=False)
     app, c = client_for(webapp.Settings.for_case(case))
     page = c.get("/").get_data(as_text=True)
-    assert "Release of DSAR-TEST-0" in page and "Deadline unknown" in page and "Items scored 7+ decided" in page
+    assert "Release of DSAR-TEST-0" in page and "Deadline unknown" in page and "Items scored 6+ decided" in page
     r = c.post("/release/check", data={"csrf": c.csrf, "item": "received", "done": "1", "value": "20/10/2026"})
     assert "error=" in r.headers["Location"]
     c.post("/release/check", data={"csrf": c.csrf, "item": "received", "done": "1", "value": "2026-10-20"})
@@ -509,3 +509,18 @@ def test_unreviewed_items_are_brought_into_the_personal_data_reviewer(case, temp
                headers={"X-CSRF": c.csrf})
     assert r.get_json()["decided"] == len(f.docs()[0]["elements"])
     assert markup.undecided_count(markup.Folder(folder, "", None).docs()[0]) == 0
+
+
+def test_go_to_review_brings_unreviewed_items_in_and_opens_the_reviewer(case, template):
+    with db.connect(case / "dsar.sqlite") as conn:
+        due = [cid for s, ids in disclosure.intake(conn).items() if s >= disclosure.MIN_SCORE for cid in ids]
+    assert due
+    app, c = client_for(webapp.Settings.for_case(case))
+    page = c.get("/").get_data(as_text=True)
+    assert 'action="/toolbox/redaction/review-due"' in page and "Go to review" in page
+    r = c.post("/toolbox/redaction/review-due", data={"csrf": c.csrf})
+    assert "/toolbox/redaction/all/" in r.headers["Location"]
+    with db.connect(case / "dsar.sqlite") as conn:
+        assert all(disclosure.latest(conn)[cid]["decision"] == disclosure.IN_REVIEWER for cid in due)
+        assert not [s for s in disclosure.intake(conn) if s >= disclosure.MIN_SCORE]
+    assert audit.AuditLog(case / "output").entries()[-1]["data"]["via"] == "Go to review"

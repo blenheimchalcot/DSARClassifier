@@ -151,6 +151,29 @@ def all_review():
     return redirect(url_for(".page", fid=live[-1], section=request.args.get("section", "review"), all=1))
 
 
+@bp.route("/review-due", methods=["POST"])
+def review_due():
+    """Go to review: bring every unreviewed item at or above the review line into the reviewer
+    (logged as a review intake), then open the Personal Data Reviewer."""
+    from dsar import db, disclosure, personal_data_report
+    from dsar.webapp import cases
+    s = current_app.config["DSAR"]
+    if not s.case_bound:
+        return redirect(url_for(".all_review"))
+    fam = cases.family(s)
+    with db.connect(fam.review_dir / "dsar.sqlite") as conn:
+        db.init_schema(conn)
+        due = {k: v for k, v in disclosure.intake(conn).items() if k >= markup.REVIEW_MIN_SCORE}
+        for score, ids in due.items():
+            result = personal_data_report.send_to_reviewer(conn, fam.review_output, ids, records.reviewer(),
+                                                           label=f"score{score}")
+            entry = {**result, "files": len(result["files"]), "chunk_ids": ids, "intake_score": score,
+                     "request": fam.main_ref, "via": "Go to review"}
+            for out in fam.logs(s.output_dir):
+                audit.AuditLog(out).append("review", "review intake", entry)
+    return redirect(url_for(".all_review", section="review"))
+
+
 @bp.route("/intake", methods=["POST"])
 def intake():
     """Bring unreviewed classified items into review as a new folder (one file per item, exact text)."""
