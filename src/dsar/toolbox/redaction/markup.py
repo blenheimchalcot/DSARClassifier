@@ -805,6 +805,52 @@ async def score_folder(folder: Path, *, system_prompt: str, model: str, subject_
             "carried": carried, "prompt_sha256": prompt_sha, "model": model}
 
 
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def score_one(folder: Path, file: str, element: str, *, system_prompt: str, model: str, subject_name: str,
+              max_tokens: int, temperature: float, reviewer: str, expected_digest: str | None = None) -> dict:
+    """Live score for one element, asked for by the reviewer: the same model, prompt and request as
+    `dsar markup score`, sent only to the Ollama on this machine. Appended to SCORES_NAME with method
+    "live" and whether the model's evidence is in the text. A suggestion, never a decision."""
+    from urllib.parse import urlparse
+
+    import httpx
+
+    from dsar import classify, evidence
+
+    url = classify.ollama_url()
+    if urlparse(url).hostname not in LOCAL_HOSTS:
+        raise ValueError(f"Ollama is set to {url}: live scoring only uses the Ollama on this machine")
+    info = classify.ollama_info(model)
+    if not info.get("digest"):
+        raise ValueError(f"The local Ollama at {url} isn't serving {model}: {info.get('error') or 'model not installed'}")
+    if expected_digest and not info["digest"].startswith(expected_digest):
+        raise ValueError(f"The installed {model} ({info['digest'][:12]}) isn't the validated build ({expected_digest[:12]})")
+    f = Folder(folder, "", None)
+    d = next((x for x in f.docs() if x["name"] == file), None)
+    el = d and next((e for e in d["elements"] if e["id"] == element), None)
+    if not el:
+        raise KeyError(f"{file} has no element {element}")
+    text = element_text(d["text"], el)
+    label = f"{el['who']} at {el['t']}" if el.get("who") else el["label"]
+    user = classify.build_user_prompt("document passage", f"{file}, {label}", subject_name, text)
+    with httpx.Client(base_url=url, timeout=300.0) as client:
+        resp = client.post("/api/chat", json=classify.chat_request(
+            model, system_prompt, [{"role": "user", "content": user}], max_tokens=max_tokens, temperature=temperature))
+        resp.raise_for_status()
+        parsed = classify.parse_response(resp.json()["message"]["content"])
+    row = {"file": file, "sha256": d["sha256"], "span": el["parts"], "score": parsed.score,
+           "description": parsed.description, "evidence": parsed.evidence, "special": parsed.special_return,
+           "evidence_check": evidence.verify(parsed.score, parsed.evidence, text, subject_name),
+           "model": model, "model_digest": info["digest"], "ollama_url": url,
+           "prompt_sha256": hashlib.sha256(system_prompt.encode()).hexdigest(),
+           "method": "live", "requested_by": reviewer, "ts": _now()}
+    with (Path(folder) / SCORES_NAME).open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return row
+
+
 def carry_item_scores(folder: Path, item_scores: dict[str, int], *, matcher=None, short_max: int = 0,
                       model: str = "", prompt_sha: str | None = None) -> int:
     """Give lines of items scored at or above the review line their item's score (see score_folder)."""
@@ -948,6 +994,7 @@ main{padding:0 32px 64px;max-width:940px;width:100%}
 .mark{background:var(--redbg);color:var(--red);text-decoration:line-through;cursor:pointer;border-radius:2px;outline:1px dashed var(--red)}
 .blk{background:#000;color:#fff;font-size:12px;padding:1px 6px;border-radius:2px;white-space:nowrap}
 .itemscore{background:var(--bg);border-left:3px solid var(--part,#c80);border-radius:6px;padding:8px 12px;margin:0 0 10px;font-size:14px}.itemscore .ev{font-size:12px;opacity:.75;margin-top:4px}.sect{display:flex;justify-content:space-between;align-items:center;width:100%;font-weight:600}.sect .cnt{font-weight:600;background:var(--bg);border-radius:99px;padding:0 8px;font-size:12px}.sect.on .cnt{color:var(--ink,#1d1d1b);background:#fff}.chips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:6px 0}.chip{border:1px solid var(--line);background:var(--panel);border-radius:99px;padding:2px 10px;font:inherit;font-size:12px;cursor:pointer}.chip.on{background:var(--accent,#2f5d8a);color:#fff;border-color:transparent}
+.sug{margin:8px 0 4px;padding:8px 12px;border-left:3px solid var(--accent,#2f5d8a);background:var(--bg);border-radius:6px;font-size:14px}.sug.err{border-color:var(--red)}.sug .t{margin-top:4px}
 .fbar{position:sticky;top:0;z-index:5;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:0 0 12px;box-shadow:0 2px 6px rgba(0,0,0,.06)}.frow{display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin:4px 0}.fgrp{display:flex;gap:6px;flex-wrap:wrap;align-items:center}.fl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;opacity:.7;min-width:150px}.fbar .chip{font-size:13px;padding:4px 12px}.chip .n{opacity:.7;margin-left:2px}.tog{font-size:13px;display:flex;gap:6px;align-items:center;margin-left:auto;cursor:pointer}.chip.clear{opacity:.7}.filehead{margin:16px 0 6px;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}.pair{display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:start;border:1px solid var(--line);border-radius:8px;padding:10px;margin:6px 0;background:var(--panel)}.pair .ptxt{white-space:pre-wrap;font-size:14px;margin-top:4px}.pair .pbtn{display:flex;flex-direction:column;gap:6px;max-width:240px;font-size:13px}.pair .own{display:flex;flex-direction:column;gap:4px}.pair .own .btn{font-size:13px;padding:3px 8px}.el.pair{display:grid}.pair .ph{font-weight:600;font-size:13px;display:flex;gap:8px;align-items:center;margin-bottom:4px}.pair .side{padding:8px;border-radius:6px}.pair .side.now{background:var(--bg)}.grpn{background:#fff1b8;color:#7a5200;border-radius:99px;padding:0 8px;font-size:12px}.pair.conf .side.now{background:#fbe3e1;border-left:3px solid var(--red,#b3261e)}.pair .win{background:#d9f2e0;border-radius:2px}.pair .wout{text-decoration:line-through;color:var(--red,#b3261e);background:#fbe3e1}.pair .why{font-size:11px;color:var(--red,#b3261e);margin:0 4px}.pair .side.was{background:var(--okbg,#e6f4ea);border-left:3px solid var(--ok,#2e7d4f)}.ctx{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:50;display:flex;align-items:center;justify-content:center}.ctx[hidden]{display:none}.ctxbox{background:var(--panel,#fff);color:var(--ink,#1d1d1b);width:min(1000px,94vw);height:88vh;border-radius:10px;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,.3)}.ctxhead{display:flex;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line)}.ctxbody{overflow:auto;padding:12px 16px;flex:1}.ctxt{white-space:pre-wrap;font-size:14px;line-height:1.5}.ctxt mark,.ctx mark{background:#ffe58a;padding:0 1px}.ctxc{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:8px 0}.ctxc.here{border:2px solid #c80;background:#fff8e1}.ctxm{font-size:12px;color:var(--muted);margin-bottom:4px}.ctxb{margin-left:6px;font-size:11px;padding:1px 7px}.wibar{margin:0 0 10px}.wi{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;margin-left:10px;text-transform:none;letter-spacing:0;font-weight:400}.filehead .wi .btn{font-size:11px;padding:1px 8px}.itemwhy{text-transform:none;letter-spacing:0;font-weight:400;font-size:13px;color:var(--ink,#1d1d1b);margin-top:4px}.scope{background:var(--hl,#fff4d6);border-radius:8px;padding:8px 12px;margin:0 0 10px;font-size:14px}.el.p-hi{border-left:6px solid #c62828!important}.el.p-mid{border-left:6px solid #ef6c00!important}.el.p-low{border-left:6px solid #f2b705!important}.el.p-un{border-left:6px solid #9e9e9e!important}.nextbar{display:flex;gap:12px;align-items:center;justify-content:space-between;background:#fdecea;border:1px solid #f5c2c0;border-radius:8px;padding:10px 14px;margin:0 0 12px;font-size:14px}.nextbar.done{background:#e6f4ea;border-color:#b7dfc4}.lt{border-radius:99px;padding:0 8px;font-size:12px;font-weight:700;color:#fff;background:#c62828}.lt.amb{background:#ef6c00}.lt.ok{background:#2e7d4f}.form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;padding:8px;background:var(--bg);border-radius:6px;font-size:13px}.form.top{justify-content:flex-end;margin:8px 0 10px}.form.col{flex-direction:column;align-items:flex-end}.form .frow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:flex-end}.btn kbd{font:600 10px/1 var(--mono,monospace);border:1px solid currentColor;border-radius:3px;padding:1px 4px;margin-left:4px;opacity:.6}
 .form select,.form input{padding:4px 6px;font:inherit;font-size:13px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px}.form input{flex:1;min-width:140px}
 mark{background:#ffe066;color:#000}
@@ -1025,12 +1072,24 @@ function cardHTML(d,el,key,who){
   if(full===key)top=`<div class="form top col"><div class="frow"><button class="btn stop" data-a="fullok">Leave out (Enter)</button><button class="btn" data-a="fullcancel">Cancel (Esc)</button></div><div class="frow">Leave all of this element out. Reason (press its number): <select id="fr">${REASONS.map((x,i)=>`<option value="${esc(x)}" ${x===lastReason?"selected":""}>${i+1} · ${esc(x)}</option>`).join("")}</select><input id="fn" placeholder="Note (required for Other)"></div></div>`;
   const s=el.score,chip=s?(s.score==null?`<span class="sc lo" title="${esc(s.special||s.description||"")}">Model: –</span>`:`<span class="sc ${s.score>=MIN?"hi":s.score>=5?"mid":"lo"}" title="Model suggestion, not a decision: ${esc(s.description||"")}${s.evidence?" | "+esc(s.evidence):""}">Model ${s.score}</span>`):"";
   const name=el.who?`<b>${esc(el.who)}${el.split?" <span class='t'>(split by reviewer)</span>":""}</b><span class="t">${esc(el.t||"")}</span>`:`<b style="color:var(--muted)">${esc(el.label)}</b>`;
-  return `<div class="el ${st} ${prio(el,dec)} ${subj?"subj":""} ${editing?"editing":""} ${splitting?"editing splitting":""} ${focus===key?"focus":""}" data-el="${key}" style="--c:${c}"><div class="h">${name}${chip}<button class="btn sm ctxb" data-ctx type="button" title="See the whole document, item and conversation">Context</button>${ctl}</div>${top}${prior?`<div class="prior">Decided before this element was split: ${prior}. Please decide again.</div>`:""}<div class="txt">${body}</div>${form}</div>`}
+  return `<div class="el ${st} ${prio(el,dec)} ${subj?"subj":""} ${editing?"editing":""} ${splitting?"editing splitting":""} ${focus===key?"focus":""}" data-el="${key}" style="--c:${c}"><div class="h">${name}${chip}<button class="btn sm ctxb" data-ctx type="button" title="See the whole document, item and conversation">Context</button><button class="btn sm ctxb" data-sug type="button" title="Ask the local model (Ollama on this machine) for a score and its reasons (S)" ${SUGGESTING.has(key)?"disabled":""}>${SUGGESTING.has(key)?"Scoring…":s&&s.score!=null?"Score again":"Suggest score"} <kbd>S</kbd></button>${ctl}</div>${top}${sugHTML(key,s)}${prior?`<div class="prior">Decided before this element was split: ${prior}. Please decide again.</div>`:""}<div class="txt">${body}</div>${form}</div>`}
+// Live score: the local model's suggestion for one paragraph, shown with its reasons and evidence check.
+const SUGGESTING=new Set(),SUG={};
+function sugHTML(key,s){const r=SUG[key];if(!r)return "";if(r.error)return `<div class="sug err">Couldn't score: ${esc(r.error)}</div>`;
+ const ev=r.evidence_check==="yes"?"✓ found in the text":r.evidence_check?`✗ ${esc(r.evidence_check)}: not found exactly in the text, so read it before relying on this score`:"";
+ return `<div class="sug"><b>Model suggests ${r.score==null?"no score":r.score}</b>${r.score!=null?` · ${CLS[r.score>=7?"hi":"lo"]}`:""} · ${esc(r.description||r.special||"")}${r.evidence?`<div class="t">Evidence: “${esc(r.evidence)}” ${ev}</div>`:""}<div class="t">${esc(r.model)} on this machine · a suggestion, not a decision</div></div>`}
+async function suggest(key){if(SUGGESTING.has(key))return;const [fi,id]=splitKey(key),d=DOCS[fi];SUGGESTING.add(key);delete SUG[key];render();
+ try{const r=await fetch(fbase(d)+"api/suggest",{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify({file:d.name,element:id})});const j=await r.json();
+  if(!r.ok)SUG[key]={error:j.error||r.statusText};else{SUG[key]=j;const el=d.elements.find(e=>e.id===id);if(el)el.score=j}}
+ catch(e){SUG[key]={error:String(e)}}
+ SUGGESTING.delete(key);PIN.add(key);render()}
+// A paragraph just scored stays on screen until it's decided, even if its new score is outside the filter.
+const PIN=new Set();
 function render(){if(MODE!=="file")return renderSection();const d=DOCS[cur],m=document.getElementById("main");if(!d){m.innerHTML="<p>No .txt files in this folder.</p>";return}
  const who=[...new Set(d.elements.map(e=>e.who).filter(Boolean))],n=Object.keys(d.decisions).length,total=d.elements.filter(e=>(!e.blank&&!e.below)||d.decisions[e.id]).length;
  let h=`<div class="bar"><input type="search" id="q" placeholder="Search…" value="${esc(q)}"><span class="toggle"><button data-v="original" class="${view==="original"?"on":""}">Original</button><button data-v="redacted" class="${view==="redacted"?"on":""}">As extracted</button></span>
   <select id="min" class="btn" title="Show only elements the model scored at or above this"><option value="-1">All scores</option>${[1,5,6,7,8].map(n=>`<option value="${n}" ${minScore===n?"selected":""}>Model score ≥ ${n}</option>`).join("")}</select><button class="btn" id="all">Extract all not yet reviewed</button><button class="btn primary" id="exp">Export redacted copy</button></div>
-  <div class="legend"><span><i class="sw" style="background:var(--okbg);border:1px solid var(--ok)"></i>Extracted</span><span><i class="sw" style="background:var(--redbg);border:1px solid var(--red)"></i>Left out</span><span>${n} of ${total} elements reviewed</span><span class="keys"><kbd>E</kbd> extract · <kbd>L</kbd> leave out, then <kbd>1</kbd>–<kbd>9</kbd> for the reason · <kbd>⇧L</kbd> leave out, same reason as last · <kbd>P</kbd> leave part out · <kbd>W</kbd> / <kbd>X</kbd> whole item in / out · <kbd>C</kbd> context · <kbd>↓</kbd><kbd>↑</kbd> move</span></div>`;
+  <div class="legend"><span><i class="sw" style="background:var(--okbg);border:1px solid var(--ok)"></i>Extracted</span><span><i class="sw" style="background:var(--redbg);border:1px solid var(--red)"></i>Left out</span><span>${n} of ${total} elements reviewed</span><span class="keys"><kbd>E</kbd> extract · <kbd>L</kbd> leave out, then <kbd>1</kbd>–<kbd>9</kbd> for the reason · <kbd>⇧L</kbd> leave out, same reason as last · <kbd>P</kbd> leave part out · <kbd>W</kbd> / <kbd>X</kbd> whole item in / out · <kbd>C</kbd> context · <kbd>S</kbd> suggest score · <kbd>↓</kbd><kbd>↑</kbd> move</span></div>`;
  if(d.item)h+=`<div class="itemscore">Classified as a whole item: <b>model score ${d.item.score??"–"}</b>${d.item.reason?" · "+esc(d.item.reason):""}${d.item.evidence?`<div class="ev">Evidence: “${esc(d.item.evidence)}”</div>`:""}</div>`;
  h+=wiControls(d,cur)?`<div class="wibar">${wiControls(d,cur)}</div>`:"";
  if(d.stale)h+=`<div class="warn">${d.stale} earlier decision(s) were made on a different version of this file and are not shown.</div>`;
@@ -1068,6 +1127,7 @@ function render(){if(MODE!=="file")return renderSection();const d=DOCS[cur],m=do
 }
 function wire(m){wireWI(m);
  m.querySelectorAll("[data-ctx]").forEach(b=>b.onclick=ev=>{ev.stopPropagation();const [fi,id]=splitKey(b.closest(".el").dataset.el);showContext(DOCS[fi],id)});
+ m.querySelectorAll("[data-sug]").forEach(b=>b.onclick=ev=>{ev.stopPropagation();suggest(b.closest(".el").dataset.el)});
  m.querySelectorAll("[data-ctx2]").forEach(b=>b.onclick=ev=>{ev.stopPropagation();ctxFor(b.dataset.ctx2)});
  m.querySelectorAll("[data-a]").forEach(b=>b.onclick=async()=>{const key=b.closest(".el").dataset.el,[fi,id]=splitKey(key),a=b.dataset.a;cur=fi;
   if(a==="approve"){if(DOCS[cur].decisions[id]?.decision==="release")return advance(key);if(await act({action:"decide",element:id,decision:"release"})){await load(true);advance(key)}}
@@ -1104,7 +1164,7 @@ function src(x){return (x.d.item&&x.d.item.source)||"Unknown"}
 function coll(x){return (x.d.item&&x.d.item.collection)||"Unknown"}
 function lowView(){F.cls=new Set(["lo"])}   // old ?section=low links: the review view showing 6 and below
 function reviewPool(done){return [...pool("review"),...pool("low"),...(done?pool("done"):[])]}
-function applyF(items,skip){return items.filter(x=>(skip==="cls"||!F.cls.size||F.cls.has(cls(x)))&&(skip==="co"||!F.co.size||F.co.has(coll(x)))&&(skip==="so"||!F.so.size||F.so.has(src(x))))}
+function applyF(items,skip){return items.filter(x=>(skip==="cls"||!F.cls.size||F.cls.has(cls(x))||(!x.dec&&PIN.has(x.fi+"|"+x.el.id)))&&(skip==="co"||!F.co.size||F.co.has(coll(x)))&&(skip==="so"||!F.so.size||F.so.has(src(x))))}
 function filterBar(){const all=reviewPool(F.showDone),cnt=(skip,fn)=>{const m={};for(const x of applyF(all,skip))m[fn(x)]=(m[fn(x)]||0)+1;return m};
  const grp=(name,label,keys,names,c)=>`<div class="fgrp"><span class="fl">${label}</span>${keys.map(k=>`<button class="chip ${F[name].has(k)?"on":""}" data-f="${name}" data-v="${esc(k)}">${esc(names?names[k]:k)} <span class="n">${c[k]||0}</span></button>`).join("")}${name==="cls"?"":`<button class="chip ${F[name].size?"":"on"}" data-f="${name}" data-v="*">all</button>`}</div>`;
  return `<div class="fbar"><div class="frow">${grp("cls","DSAR classification",["hi","lo","unk"],CLS,cnt("cls",cls))}<label class="tog"><input type="checkbox" id="showdone" ${F.showDone?"checked":""}> Show reviewed</label></div>
@@ -1179,7 +1239,7 @@ function renderSection(){const m=document.getElementById("main"),who=[];if(MODE=
   if(F.sb)items=items.filter(x=>{const s=sc(x.el);return F.sb===MIN+"+"?s!==null&&s>=MIN:F.sb==="below "+MIN?s!==null&&s<MIN:s===null})}
  if(MODE==="repeats"&&items.length)h+=`<div class="bar"><button class="btn primary" id="confirmall">Confirm all ${items.length} shown</button><span class="t">Your earlier decision is on the left, the repeat to decide on the right. Confirm to record the same outcome under your name; “Not a match” moves it back to be reviewed.</span></div>`;
  if(MODE==="review"){const und=items.filter(x=>!x.dec),top=und[0];
-  h+=und.length?`<div class="nextbar"><div><b>Next step:</b> decide ${und.length} paragraph(s), most important first${top&&eff(top)!=null?` (highest score ${eff(top)})`:""}. Red = 9–10, orange = 8, amber = ${MIN<7?MIN+"–7":"7"}, grey = not scored.</div><button class="btn primary" id="gofirst">Start with the most important →</button></div><div class="legend"><span class="keys"><kbd>E</kbd> extract · <kbd>L</kbd> leave out, then <kbd>1</kbd>–<kbd>9</kbd> for the reason · <kbd>⇧L</kbd> leave out, same reason as last · <kbd>P</kbd> leave part out · <kbd>W</kbd> / <kbd>X</kbd> whole item in / out · <kbd>C</kbd> context · <kbd>↓</kbd><kbd>↑</kbd> move</span></div>`
+  h+=und.length?`<div class="nextbar"><div><b>Next step:</b> decide ${und.length} paragraph(s), most important first${top&&eff(top)!=null?` (highest score ${eff(top)})`:""}. Red = 9–10, orange = 8, amber = ${MIN<7?MIN+"–7":"7"}, grey = not scored.</div><button class="btn primary" id="gofirst">Start with the most important →</button></div><div class="legend"><span class="keys"><kbd>E</kbd> extract · <kbd>L</kbd> leave out, then <kbd>1</kbd>–<kbd>9</kbd> for the reason · <kbd>⇧L</kbd> leave out, same reason as last · <kbd>P</kbd> leave part out · <kbd>W</kbd> / <kbd>X</kbd> whole item in / out · <kbd>C</kbd> context · <kbd>S</kbd> suggest score · <kbd>↓</kbd><kbd>↑</kbd> move</span></div>`
    :`<div class="nextbar done"><b>✓ Nothing left to decide with these filters.</b> ${counts().repeats?"Next: confirm the repeats.":counts().conflicts?"Next: resolve the conflicts.":`Next: <a href="${location.pathname.split("/toolbox/")[0]}/report/">build the report</a>.`}</div>`}
  h+=`<p class="t">${items.length} element(s)</p>`;
  let last=null;
@@ -1264,6 +1324,7 @@ document.addEventListener("keydown",ev=>{if(ev.metaKey||ev.ctrlKey||ev.altKey)re
  if(i>=0&&ev.key==="L"&&ev.shiftKey){ev.preventDefault();quickLeave(focus);return}
  if(i>=0&&(k==="w"||k==="x")){ev.preventDefault();const [fi]=splitKey(focus);if(undecidedOf(DOCS[fi]).length)decideFile(fi,k==="w"?"release":"redact_full",k==="w"?"":NOT_REQ);return}
  if(i>=0&&k==="c"){ev.preventDefault();const [fi,id]=splitKey(focus);showContext(DOCS[fi],id);return}
+ if(i>=0&&k==="s"){ev.preventDefault();suggest(focus);return}
  if(k==="arrowdown"||k==="j"){ev.preventDefault();goTo(ids[Math.min(i+1,ids.length-1)]||ids[0])}
  else if(k==="arrowup"||k==="k"){ev.preventDefault();goTo(ids[Math.max(i-1,0)])}
  else if(["a","e","r","l","p"].includes(k)){if(i<0){goTo(ids.find(undecidedKey)||ids[0]);return}ev.preventDefault();

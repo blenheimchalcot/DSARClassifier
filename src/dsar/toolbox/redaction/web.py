@@ -426,6 +426,40 @@ def act(fid):
     return jsonify(entry)
 
 
+@bp.route("/f/<fid>/api/suggest", methods=["POST"])
+def suggest(fid):
+    """Live score for one paragraph from the local model (Ollama on this machine), logged in the case audit."""
+    from dsar import classify
+    from dsar.config import load_config
+    from dsar.webapp import cases
+
+    f = _folder(fid)
+    s = current_app.config["DSAR"]
+    if not f.reviewer:
+        return jsonify({"error": "Sign in first: the score is recorded with your name."}), 403
+    if not s.config_path or not s.data_dir:
+        return jsonify({"error": "Live scoring needs a case (its config and prompt)."}), 400
+    cfg = load_config(s.config_path)
+    prompt_path = Path(s.data_dir) / "claude_strict.md"
+    body = request.get_json(force=True)
+    try:
+        row = markup.score_one(f.folder, body["file"], body["element"], system_prompt=classify.load_system_prompt(prompt_path),
+                               model=cfg.model.default, subject_name=cfg.subject.name, max_tokens=cfg.model.max_tokens,
+                               temperature=cfg.model.temperature, reviewer=f.reviewer,
+                               expected_digest=cfg.model.expected_digest)
+    except (KeyError, ValueError) as exc:
+        return jsonify({"error": str(exc).strip("'\"")}), 400
+    except Exception as exc:                                   # noqa: BLE001 - shown to the reviewer, nothing recorded
+        return jsonify({"error": f"The local model didn't answer: {exc}"}), 502
+    entry = {"folder": str(f.folder), "file": row["file"], "sha256": row["sha256"], "span": row["span"],
+             "score": row["score"], "evidence_check": row["evidence_check"], "model": row["model"],
+             "model_digest": row["model_digest"], "ollama_url": row["ollama_url"],
+             "prompt": str(prompt_path), "prompt_sha256": row["prompt_sha256"], "reviewer": f.reviewer}
+    for out in (cases.family(s).logs(s.output_dir) if s.case_bound else []):
+        audit.AuditLog(out).append("review", "live score", entry)
+    return jsonify(row)
+
+
 @bp.route("/f/<fid>/api/extracts")
 def extracts(fid):
     return jsonify(_folder(fid).export_extracts())

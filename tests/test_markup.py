@@ -360,3 +360,28 @@ def test_page_carries_the_review_line_and_the_subjects_names():
     assert f"const MIN={markup.REVIEW_MIN_SCORE}," in page
     assert '"Sam Sample"' in page and '"sam@example.com"' in page and '"SS"' not in page   # too short to highlight
     assert "__" + "NAMES__" not in page and "__" + "MIN__" not in page
+
+
+def test_live_score_uses_only_the_local_ollama_and_is_recorded(tmp_path, monkeypatch):
+    import httpx
+
+    from dsar import classify
+
+    (tmp_path / "a.txt").write_text("Sam Sample's salary is £40,000.\n", encoding="utf-8")
+    el = markup.Folder(tmp_path, "", None).docs()[0]["elements"][0]["id"]
+    kw = dict(system_prompt="p", model="m", subject_name="Sam Sample", max_tokens=50, temperature=0, reviewer="R")
+    monkeypatch.setenv("OLLAMA_URL", "https://ollama.example.com")
+    with pytest.raises(ValueError, match="this machine"):
+        markup.score_one(tmp_path, "a.txt", el, **kw)
+    monkeypatch.setenv("OLLAMA_URL", "http://127.0.0.1:11434")
+    monkeypatch.setattr(classify, "ollama_info", lambda m: {"digest": "abc123def456"})
+    with pytest.raises(ValueError, match="validated build"):
+        markup.score_one(tmp_path, "a.txt", el, expected_digest="fff", **kw)
+    reply = {"message": {"content": "7 | Salary of the subject | salary is £40,000 | "}}
+    real = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **a: real(transport=httpx.MockTransport(
+        lambda req: httpx.Response(200, json=reply)), **a))
+    row = markup.score_one(tmp_path, "a.txt", el, **kw)
+    assert row["score"] == 7 and row["method"] == "live" and row["evidence_check"] == "yes"
+    assert row["ollama_url"] == "http://127.0.0.1:11434" and row["requested_by"] == "R"
+    assert markup.Folder(tmp_path, "", None).docs()[0]["elements"][0]["score"]["score"] == 7
