@@ -159,3 +159,59 @@ def test_chronological_processing_assigns_origin_to_earliest(tmp_path: Path):
     assert chunks[0].skipped_as_duplicate_of is None
     assert chunks[1].item_ref == "msg-later"
     assert chunks[1].skipped_as_duplicate_of is not None
+
+
+def _ingest(conn, msgs, max_chars=8000):
+    chunks = list(ingest_emails(iter(msgs), _matcher(), conn, max_chars=max_chars, overlap_chars=200))
+    for c in chunks:
+        db.upsert_chunk(conn, c)
+    return chunks
+
+
+def test_reingesting_the_same_pst_leaves_emails_unchanged(tmp_path: Path):
+    """Every ingest re-reads the PSTs (adding a file to a case runs ingest again).
+    The paragraph hashes recorded by the first pass point at each message's own
+    chunk; they must not be treated as duplicates on the second pass, or each
+    email is overwritten with a cut-down copy or the all-duplicate placeholder."""
+    original_para = (
+        "We are scheduling an HR review for Emma Banks next Thursday about "
+        "her recent performance concerns and the grievance she submitted."
+    )
+    new_para = "Adding Bob from legal: he should be in the room given the grievance EB filed."
+    msgs = [
+        _msg("1", "2026-04-20T09:00:00", "HR review", original_para),
+        _msg("2", "2026-04-20T10:00:00", "RE: HR review",
+             f"{new_para}\n\n-----Original Message-----\nFrom: Alice\n\n{original_para}",
+             headers="In-Reply-To: <1@ex.com>\n"),
+    ]
+    with db.connect(tmp_path / "d.sqlite") as conn:
+        db.init_schema(conn)
+        first = _ingest(conn, msgs)
+        second = _ingest(conn, msgs)
+        stored = {r[0]: r[1:] for r in conn.execute(
+            "SELECT chunk_id, content, alias_matched, skipped_as_duplicate_of FROM chunks")}
+
+    assert [(c.chunk_id, c.content, c.alias_matched, c.skipped_as_duplicate_of) for c in second] == \
+           [(c.chunk_id, c.content, c.alias_matched, c.skipped_as_duplicate_of) for c in first]
+    assert original_para in stored[first[0].chunk_id][0]
+    assert stored[first[0].chunk_id][1] == 1
+    assert "[All paragraphs already classified" not in stored[first[0].chunk_id][0]
+    # The reply still drops the quoted original on both passes.
+    assert original_para not in stored[first[1].chunk_id][0]
+    assert new_para in stored[first[1].chunk_id][0]
+
+
+def test_reingesting_a_long_email_keeps_every_part(tmp_path: Path):
+    """A long email is split into parts whose ids differ from the message's own;
+    its paragraph hashes are recorded against the message id. A re-read must
+    produce the same parts with the same text."""
+    paras = [f"Paragraph {i} about the Emma Banks review, with enough words to be hashed properly."
+             for i in range(40)]
+    msg = _msg("1", "2026-04-20T09:00:00", "Long report", "\n\n".join(paras))
+    with db.connect(tmp_path / "d.sqlite") as conn:
+        db.init_schema(conn)
+        first = _ingest(conn, [msg], max_chars=800)
+        second = _ingest(conn, [msg], max_chars=800)
+
+    assert len(first) > 1
+    assert [(c.chunk_id, c.content) for c in second] == [(c.chunk_id, c.content) for c in first]
