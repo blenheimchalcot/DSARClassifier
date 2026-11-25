@@ -14,9 +14,10 @@
   {% else %}
   <ul class="todo-list">
     {% for r in todo %}<li><b>{{ r.name }}</b>: {{ r.sections.review }} paragraph(s) to decide <a class="btn sm primary" href="{{ url_for('.all_review', section='review') }}">Review them</a></li>{% endfor %}
-    {% if total and total.repeats %}<li><b>Repeats</b>: {{ total.repeats }} <a class="btn sm" href="{{ url_for('.page', fid=live[-1].id, section='repeats') }}">Confirm them</a></li>{% endif %}
+    {% for r in live | selectattr("sections.repeats") %}<li><b>{{ r.name }}</b>: {{ r.sections.repeats }} repeat(s) of text you have already decided <a class="btn sm primary" href="{{ url_for('.page', fid=r.id, section='repeats') }}">Confirm them</a><div class="mono muted small">{{ r.label }}</div></li>{% endfor %}
     {% if n_conf %}<li><b>Conflicts</b>: {{ n_conf }} <a class="btn sm" href="{{ url_for('.page', fid=live[-1].id, section='conflicts') }}">Resolve them</a></li>{% endif %}
   </ul>
+  {% if todo or n_conf or (total and total.repeats) %}<p class="small"><b>Until these are done the Personal Data Report builds as a DRAFT.</b> The <a href="{{ url_for('review.report_page') }}">Report</a> page lists the same files.</p>{% endif %}
   {% endif %}
   <p class="small muted">“Below {{ min_score }}” paragraphs are ones the model scored under {{ min_score }} inside items being reviewed: they need no decision and stay out of the report unless you extract one.</p>
 </div>

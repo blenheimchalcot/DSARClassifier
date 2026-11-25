@@ -1078,6 +1078,10 @@ def personal_data_report_cmd(config_path: str | None, reviewer: str, run: audit.
                f"{result['from_redaction']} from redaction), {result['outstanding']} outstanding, "
                f"{len(result['placeholders_left'])} template placeholder(s) left")
     click.echo(f"  Register (private): {result['register']}")
+    if result["still_to_do"]:
+        click.echo("  Still to do before the report is final (`dsar serve`):")
+        for line in result["still_to_do"]:
+            click.echo(f"    - {line}")
     run.data.update(report=result["report"], draft=result["draft"], extracts=result["extracts"],
                     outstanding=result["outstanding"])
     if result["draft"]:

@@ -524,3 +524,35 @@ def test_go_to_review_brings_unreviewed_items_in_and_opens_the_reviewer(case, te
         assert all(disclosure.latest(conn)[cid]["decision"] == disclosure.IN_REVIEWER for cid in due)
         assert not [s for s in disclosure.intake(conn) if s >= disclosure.MIN_SCORE]
     assert audit.AuditLog(case / "output").entries()[-1]["data"]["via"] == "Go to review"
+
+
+def test_repeats_keeping_the_report_a_draft_are_named_where_the_reviewer_finds_them(case, template, monkeypatch):
+    from click.testing import CliRunner
+
+    from dsar import cli
+    from dsar.toolbox.redaction import markup
+
+    text = "Sam Sample starts on Monday.\n\nSam Sample's desk is by the window.\n"
+    old, new = (case / "output" / n for n in ("review_stack_20261123T153032Z_score7", "review_stack_20261124T080942Z_score7"))
+    for d in (old, new):
+        d.mkdir()
+        (d / "01_note.txt").write_text(text)
+    f = markup.Folder(old, "Test Reviewer", None)
+    doc = f.docs()[0]
+    for el in doc["elements"]:
+        f.act({"file": doc["name"], "sha256": doc["sha256"], "action": "decide", "element": el["id"], "decision": "release"})
+    n = len(doc["elements"])
+
+    app, c = client_for(webapp.Settings.for_case(case))
+    page = c.get("/report/").get_data(as_text=True)
+    assert "These keep the report a DRAFT" in page and "Items scored 7 (24 Nov)" in page
+    assert f"Confirm {n} repeat(s)" in page and "section=repeats" in page and "Decide 0" not in page
+    index = c.get("/toolbox/redaction/").get_data(as_text=True)
+    assert "Items scored 7 (24 Nov)</b>: " + str(n) + " repeat(s)" in index and "builds as a DRAFT" in index
+
+    monkeypatch.setenv("DSAR_DATA_DIR", str(case))
+    r = CliRunner().invoke(cli.main, ["personal-data-report", "--reviewer", "Test Reviewer"])
+    assert r.exit_code == 0, r.output
+    assert "Still to do" in r.output
+    assert (f"Personal Data Reviewer › Items scored 7 (24 Nov) › 01_note.txt: {n} element(s) undecided, "
+            f"{n} of them repeat text you have already decided (open the folder, section Repeats)") in r.output

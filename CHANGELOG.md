@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **What keeps the report a DRAFT is named where you find it.** The Personal Data Reviewer's *What's left to do* lists repeats per folder (its plain name, e.g. *Items scored 7 (24 Nov)*, with a *Confirm them* button for that folder) and says these keep the Personal Data Report a DRAFT. The Report page's *Finish in the Personal Data Reviewer* uses the same folder names (the folder's own name below), with *Confirm N repeat(s)* and *Decide N* buttons on each file. `dsar personal-data-report` lists each outstanding thing under *Still to do* and where to clear it, instead of only a count; the list is also in the audit entry (`still_to_do`).
+
 ## 0.3.1 (2026-11-18)
 
 ### Changed
