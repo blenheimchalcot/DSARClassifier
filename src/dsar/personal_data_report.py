@@ -60,6 +60,7 @@ def template_path(*data_dirs: Path | None) -> Path:
 
 
 _PLACEHOLDER = re.compile(r"\[[^\]\n]{2,}\]")
+EXTRACTS_TABLE = "extracts table"   # _fill: the extracts are one row each in the template's second table
 _ANCHOR = re.compile(r"extract|mention you", re.I)
 
 
@@ -338,6 +339,7 @@ def _set_cell(cell, text: str) -> None:
     paras = cell.paragraphs
     first = paras[0]
     run_fmt = copy.deepcopy(first.runs[0]._r.rPr) if first.runs and first.runs[0]._r.rPr is not None else None
+    para_fmt = copy.deepcopy(first._p.pPr) if first._p.pPr is not None else None
     for p in paras[1:]:
         p._p.getparent().remove(p._p)
     for r in list(first.runs):
@@ -345,9 +347,8 @@ def _set_cell(cell, text: str) -> None:
     lines = text.split("\n") or [""]
     for i, line in enumerate(lines):
         p = first if i == 0 else cell.add_paragraph()
-        if i:
-            p.style = first.style
-            p.paragraph_format.alignment = first.paragraph_format.alignment
+        if i and para_fmt is not None:
+            p._p.insert(0, copy.deepcopy(para_fmt))     # same spacing, style and alignment as the first line
         run = p.add_run(line)
         if run_fmt is not None:
             run._r.insert(0, copy.deepcopy(run_fmt))
@@ -364,8 +365,16 @@ def flat_extracts(extracts: list[dict]) -> str:
     return "\n\n".join(report_text(e["text"]) for e in extracts)
 
 
+def _two_tables(doc) -> bool:
+    """The identifiers-then-extracts layout: a 'Data subject' table, then a one-column extracts table
+    whose header row is followed by one row to copy for each extract."""
+    return len(doc.tables) >= 2 and len(doc.tables[1].columns) == 1 and len(doc.tables[1].rows) >= 2
+
+
 def _fill(template: Path, subject_name: str, extracts: list[dict]):
-    """Fill the template; returns (document, index of the table row holding the extracts)."""
+    """Fill the template; returns (document, where the extracts are): the index of the row in the first
+    table holding them as one block, EXTRACTS_TABLE when they are one row each in the second table,
+    or None when there are none."""
     import docx
 
     doc = docx.Document(str(template))
@@ -381,6 +390,20 @@ def _fill(template: Path, subject_name: str, extracts: list[dict]):
     rows = table.rows
     if len(rows) < 2:
         raise ValueError(f"{template.name}: the table needs a header row and a 'Data subject' row")
+    if _two_tables(doc):
+        value = rows[1].cells[1].text.strip()
+        if subject_name and (not value or _PLACEHOLDER.fullmatch(value)):
+            _set_cell(rows[1].cells[1], subject_name)
+        xt = doc.tables[1]
+        model = copy.deepcopy(xt.rows[1]._tr)
+        for r in list(xt.rows)[1:]:
+            r._tr.getparent().remove(r._tr)
+        for e in extracts:
+            xt._tbl.append(copy.deepcopy(model))
+            _set_cell(xt.rows[-1].cells[0], report_text(e["text"]))
+        if not extracts:
+            xt._tbl.append(model)
+        return doc, EXTRACTS_TABLE if extracts else None
     block = flat_extracts(extracts)
     if generic:
         model = copy.deepcopy(rows[1]._tr)
@@ -418,7 +441,9 @@ def has_headers(text: str) -> bool:
 def preview(template: Path, subject_name: str, extracts: list[dict]) -> dict:
     """The report as it would be built now: intro paragraphs and table rows, from the same fill as build()."""
     doc, ai = _fill(template, subject_name, extracts)
-    intro = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+    # In the two-table layout, a heading just above a table ("Personal identifiers") is shown as the table.
+    tables = {t._tbl for t in doc.tables} if _two_tables(doc) else set()
+    intro = [p.text.strip() for p in doc.paragraphs if p.text.strip() and p._p.getnext() not in tables]
     rows = []
     for i, row in enumerate(doc.tables[0].rows):
         label, value = row.cells[0].text.strip(), row.cells[1].text.strip() if len(row.cells) > 1 else ""
@@ -432,6 +457,9 @@ def preview(template: Path, subject_name: str, extracts: list[dict]) -> dict:
             kind = "field"
         rows.append({"label": label, "value": value, "kind": kind,
                      "extracts": [{**e, "shown": report_text(e["text"])} for e in extracts] if kind == "extracts" else None})
+    if ai == EXTRACTS_TABLE:
+        rows.append({"label": doc.tables[1].rows[0].cells[0].text.strip(), "value": "", "kind": "extracts",
+                     "extracts": [{**e, "shown": report_text(e["text"])} for e in extracts]})
     return {"intro": intro, "rows": rows, "placeholders": placeholders(doc, ai)}
 
 
@@ -440,7 +468,7 @@ def placeholders(doc, extracts_row: int | None = None) -> list[str]:
     texts = [p.text for p in doc.paragraphs]
     for ti, t in enumerate(doc.tables):
         for ri, row in enumerate(t.rows):
-            if ti == 0 and ri == extracts_row:
+            if (ti == 0 and ri == extracts_row) or (ti == 1 and ri and extracts_row == EXTRACTS_TABLE):
                 continue        # extract text is the source's own, brackets and all
             texts += [c.text for c in row.cells]
     return list(dict.fromkeys(m for t in texts for m in _PLACEHOLDER.findall(t)))
@@ -452,6 +480,9 @@ def build_docx(template: Path, subject_name: str, extracts: list[dict], draft_no
         first = doc.paragraphs[0]
         para = first.insert_paragraph_before()
         run = para.add_run(draft_note)
+        if first.runs and first.runs[0]._r.rPr is not None:
+            run._r.insert(0, copy.deepcopy(first.runs[0]._r.rPr))     # the title's font, not Word's default
+            run.font.size = None
         run.bold = True
         from docx.shared import RGBColor
         run.font.color.rgb = RGBColor(0xB0, 0x00, 0x00)

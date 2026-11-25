@@ -275,6 +275,7 @@ def page(fid):
     bar = (f'<body><div style="padding:6px 16px;font:13px -apple-system,sans-serif;border-bottom:1px solid #8884">'
            f'<a href="{url_for("main.home")}">{html.escape(s.case_ref or "DSAR")}</a> · '
            f'<a href="{url_for(".all_review")}">Personal Data Reviewer</a> · <b>all of {html.escape(request_ref)}</b> · <a href="{url_for(".index")}">Folders and intake</a>'
+           f' · <a href="{url_for("help.topic", topic="review")}">? Help</a>'
            f'{(" · <a href=" + chr(34) + url_for("review.report_page") + "#preview" + chr(34) + ">← Report preview</a>") if s.case_bound else ""}'
            f'{" · <b>free-standing: not audit-logged</b>" if not s.case_bound else ""}</div>')
     names: list[str] = [subject] if subject else []

@@ -22,6 +22,7 @@
     <a href="{{ url_for(t.endpoint) }}" class="{{ 'on' if request.blueprint == t.blueprint_name }}">{{ t.name }}</a>
     {% endfor %}
   </nav>
+  <a class="helplink{{ ' on' if request.blueprint == 'help' }}" href="{{ url_for('help.topic', topic=help_topic) if help_topic else url_for('help.index') }}" title="How this step works">? Help</a>
   {% if reviewer %}
   <div class="who">Signed in as <b>{{ reviewer }}</b>
     <form class="inline" method="post" action="{{ url_for('main.signout') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn sm">Sign out</button></form>

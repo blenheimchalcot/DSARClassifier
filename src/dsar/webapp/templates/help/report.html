@@ -1,0 +1,32 @@
+{% extends "help/_layout.html" %}
+{% block help %}
+<p>The Personal Data Report gives the data subject a copy of their personal data, extracted from the documents that hold it. The app builds it from your decisions, into your organisation's Word template: first the subject's identifiers, then every extract, each piece of data once, oldest first.</p>
+
+<h2>1. Clear what's left</h2>
+<p>Open <b>Report</b> in the top bar. <b>Left to process</b> lists everything that keeps the report a <b>DRAFT</b>, grouped by what to do, each with a button to do it:</p>
+<table class="t">
+  <tr><th>Group</th><th>What to do</th></tr>
+  <tr><td>Not reviewed yet</td><td><b>Work through these in the Personal Data Reviewer</b>.</td></tr>
+  <tr><td>Finish in the Personal Data Reviewer</td><td>Files with paragraphs still undecided. <b>Confirm N repeat(s)</b> or <b>Decide N</b> opens them.</td></tr>
+  <tr><td>Held out: conflicts</td><td>Text extracted in one place and left out in another. Settle it in <i>Conflicts</i>.</td></tr>
+  <tr><td>Choose the passages</td><td>Items decided in an old workbook without saying which passages: work through them in the Personal Data Reviewer.</td></tr>
+  <tr><td>Complete the template</td><td><span class="mono">[placeholders]</span> left in the template: fill them in the case's template.</td></tr>
+</table>
+<p>A folder that shouldn't count at all (for example exact copies of another folder) can be <b>left out of the report</b> at the bottom of the page, with a reason that is logged.</p>
+
+<h2>2. Check the preview</h2>
+<p><b>Preview</b> shows the report as it would be built now. Read every extract: is it about the subject, and is anything about someone else still in it? Grey notes under each extract show where it came from; they go in the private register, not the report. To narrow an extract, use <b>Edit in Personal Data Reviewer</b> beside its source, <i>Leave part out</i> there, then <b>← Report preview</b> to come back.</p>
+
+<h2>3. Build</h2>
+<p>Press <b>Build report</b>. Two read-only files are written to the case's <span class="mono">output/personal_data_report/</span> folder, with their hashes in the audit log:</p>
+<ul>
+  <li><span class="mono">Personal_Data_Report_&lt;case&gt;_&lt;time&gt;.docx</span>: the report for the requester.</li>
+  <li><span class="mono">personal_data_report_register_&lt;case&gt;_&lt;time&gt;.csv</span>: <b>private</b>. Every source of every extract, for the case record. Never send it.</li>
+</ul>
+<p>While anything is outstanding, the build is a <b>DRAFT</b>: the file name ends <span class="mono">_DRAFT</span> and the first page says so in red. Don't send a draft. Clear what's left and build again.</p>
+
+<div class="note"><b>Always build the report here</b> (or with <span class="mono">dsar personal-data-report</span>). Never write it by hand or with another tool: only this build is tied to the decisions, the register and the audit log. Check the data subject's name on the first page before you use it.</div>
+
+<h2>4. Finish in Word</h2>
+<p><b>Download copy</b> gives you a copy to finish. Tidy the layout if needed, but don't add or change data: change the decision in the Personal Data Reviewer and build again instead. Save the final copy as PDF with the other release documents.</p>
+{% endblock %}

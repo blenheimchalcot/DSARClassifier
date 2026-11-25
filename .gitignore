@@ -26,3 +26,5 @@ data/
 *.sha256
 *.log
 build/
+# Third-party (Peninsula) release guidance: kept locally, not shared in the repository.
+Templates/Subject Access Request - Final Response Letter Template.docx
