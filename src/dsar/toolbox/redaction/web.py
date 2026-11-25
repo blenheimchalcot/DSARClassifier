@@ -115,7 +115,7 @@ def index():
     n_conf = len(markup.conflicts([(fid, docs) for fid, (path, docs) in loaded.items() if str(path) not in skip]))
     total = {k: sum(r["sections"][k] for r in live) for k in ("review", "low", "repeats", "done")} if live else None
     return render_template("redaction/index.html", rows=rows, total=total, n_conf=n_conf, intake=_intake_counts(),
-                           error=request.args.get("error", ""))
+                           min_score=markup.REVIEW_MIN_SCORE, error=request.args.get("error", ""))
 
 
 def _intake_counts() -> dict:
@@ -149,6 +149,34 @@ def all_review():
     if not s.case_bound or not live:
         return redirect(url_for(".index"))
     return redirect(url_for(".page", fid=live[-1], section=request.args.get("section", "review"), all=1))
+
+
+@bp.route("/review-due", methods=["POST"])
+def review_due():
+    """Go to review: bring every unreviewed item at or above the review line into the reviewer
+    (logged as a review intake), then open the Personal Data Reviewer."""
+    from dsar import db, disclosure, personal_data_report
+    from dsar.webapp import cases
+    s = current_app.config["DSAR"]
+    if not s.case_bound:
+        return redirect(url_for(".all_review"))
+    fam = cases.family(s)
+    with db.connect(fam.review_dir / "dsar.sqlite") as conn:
+        db.init_schema(conn)
+        due = {k: v for k, v in disclosure.intake(conn).items() if k >= markup.REVIEW_MIN_SCORE}
+        first = None
+        for score, ids in due.items():
+            result = personal_data_report.send_to_reviewer(conn, fam.review_output, ids, records.reviewer(),
+                                                           label=f"score{score}")
+            entry = {**result, "files": len(result["files"]), "chunk_ids": ids, "intake_score": score,
+                     "request": fam.main_ref, "via": "Go to review"}
+            for out in fam.logs(s.output_dir):
+                audit.AuditLog(out).append("review", "review intake", entry)
+            if first is None and result["files"]:
+                first = (Path(result["folder"]), result["files"][0])
+    if first:      # open the (highest-scored) item just brought in, whole
+        return redirect(url_for(".page", fid=_fid(first[0]), file=first[1], all=1))
+    return redirect(url_for(".all_review", section="review"))
 
 
 @bp.route("/intake", methods=["POST"])
@@ -249,8 +277,15 @@ def page(fid):
            f'<a href="{url_for(".all_review")}">Personal Data Reviewer</a> · <b>all of {html.escape(request_ref)}</b> · <a href="{url_for(".index")}">Folders and intake</a>'
            f'{(" · <a href=" + chr(34) + url_for("review.report_page") + "#preview" + chr(34) + ">← Report preview</a>") if s.case_bound else ""}'
            f'{" · <b>free-standing: not audit-logged</b>" if not s.case_bound else ""}</div>')
-    return markup.APP_PAGE.replace("__REASONS__", json.dumps(markup.REASONS)).replace("<head>", head, 1).replace(
-        "<body>", bar, 1)
+    names: list[str] = [subject] if subject else []
+    if s.config_path:
+        from dsar.config import load_config
+        try:
+            p = load_config(s.config_path).subject
+            names += [p.name, *p.aliases, *p.emails]
+        except Exception:                                       # noqa: BLE001 - names only highlight; never block the page
+            pass
+    return markup.app_page(names).replace("<head>", head, 1).replace("<body>", bar, 1)
 
 
 def _repeats(f: markup.Folder, docs: list[dict]) -> dict:
@@ -351,7 +386,7 @@ def _item_scores(folder: Path, names: list[str]) -> list[dict | None]:
     """For a review stack: each file's item as classified (model score, reason, evidence), from the case database."""
     import sqlite3
 
-    from dsar import evidence, personal_data_report
+    from dsar import evidence, personal_data_report, sources
     idx = folder / personal_data_report.STACK_INDEX
     db_path = folder.parent.parent / "dsar.sqlite"
     if not idx.is_file() or not db_path.is_file():
@@ -359,6 +394,7 @@ def _item_scores(folder: Path, names: list[str]) -> list[dict | None]:
     index = json.loads(idx.read_text(encoding="utf-8"))
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
+        origin = sources.for_chunks(conn, [v.get("chunk_id") for v in index.values() if v.get("chunk_id")])
         out = []
         for name in names:
             cid = (index.get(name) or {}).get("chunk_id")
@@ -366,7 +402,8 @@ def _item_scores(folder: Path, names: list[str]) -> list[dict | None]:
                                "LEFT JOIN classifications cl ON cl.chunk_id = c.chunk_id WHERE c.chunk_id = ?",
                                (cid,)).fetchone() if cid else None
             out.append({"chunk_id": cid, "score": row[0], "reason": row[1] or "",
-                        "evidence": row[2] or "", "evidence_check": evidence.verify(row[0], row[2], row[3], row[4])}
+                        "evidence": row[2] or "", "evidence_check": evidence.verify(row[0], row[2], row[3], row[4]),
+                        **origin.get(cid, {})}
                        if row else None)
         return out
     finally:
@@ -415,6 +452,40 @@ def act(fid):
     except (KeyError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify(entry)
+
+
+@bp.route("/f/<fid>/api/suggest", methods=["POST"])
+def suggest(fid):
+    """Live score for one paragraph from the local model (Ollama on this machine), logged in the case audit."""
+    from dsar import classify
+    from dsar.config import load_config
+    from dsar.webapp import cases
+
+    f = _folder(fid)
+    s = current_app.config["DSAR"]
+    if not f.reviewer:
+        return jsonify({"error": "Sign in first: the score is recorded with your name."}), 403
+    if not s.config_path or not s.data_dir:
+        return jsonify({"error": "Live scoring needs a case (its config and prompt)."}), 400
+    cfg = load_config(s.config_path)
+    prompt_path = Path(s.data_dir) / "claude_strict.md"
+    body = request.get_json(force=True)
+    try:
+        row = markup.score_one(f.folder, body["file"], body["element"], system_prompt=classify.load_system_prompt(prompt_path),
+                               model=cfg.model.default, subject_name=cfg.subject.name, max_tokens=cfg.model.max_tokens,
+                               temperature=cfg.model.temperature, reviewer=f.reviewer,
+                               expected_digest=cfg.model.expected_digest)
+    except (KeyError, ValueError) as exc:
+        return jsonify({"error": str(exc).strip("'\"")}), 400
+    except Exception as exc:                                   # noqa: BLE001 - shown to the reviewer, nothing recorded
+        return jsonify({"error": f"The local model didn't answer: {exc}"}), 502
+    entry = {"folder": str(f.folder), "file": row["file"], "sha256": row["sha256"], "span": row["span"],
+             "score": row["score"], "evidence_check": row["evidence_check"], "model": row["model"],
+             "model_digest": row["model_digest"], "ollama_url": row["ollama_url"],
+             "prompt": str(prompt_path), "prompt_sha256": row["prompt_sha256"], "reviewer": f.reviewer}
+    for out in (cases.family(s).logs(s.output_dir) if s.case_bound else []):
+        audit.AuditLog(out).append("review", "live score", entry)
+    return jsonify(row)
 
 
 @bp.route("/f/<fid>/api/extracts")

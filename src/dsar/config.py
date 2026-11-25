@@ -52,6 +52,9 @@ class ProvenanceRule:
     # Glob relative to the case input/ dir (fnmatch: `*` also crosses `/`).
     match: str
     label: str
+    # Source type of the matching files (one of dsar.sources.SOURCE_TYPES), e.g. "Ad hoc files" or
+    # "Database extract". Empty: worked out from Purview's metadata and the path.
+    source: str = ""
 
 
 @dataclass

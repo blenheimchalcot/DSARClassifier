@@ -16,9 +16,13 @@ the 16 GB Apple Silicon dev machine on the SharePoint corpus (sheets with
 Format dispatch
 ---------------
     .xlsx / .xlsm   →  openpyxl (read_only=True, data_only=True; macros ignored in .xlsm)
-    .xls            →  xlrd (only format still supported by xlrd 2.x)
+    .xls            →  xlrd (only format still supported by xlrd 2.x); an .xls
+                       that is really an HTML table (Salesforce and other "export
+                       to Excel" downloads) or a zipped .xlsx is read as what it is
     .xlsb           →  pyxlsb
 """
+import re
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Iterable, Iterator
 
@@ -49,11 +53,96 @@ def extract(path: Path, matcher: AliasMatcher) -> Iterator[Chunk]:
     if ext in {".xlsx", ".xlsm"}:
         yield from _extract_openpyxl(path, matcher)
     elif ext == ".xls":
-        yield from _extract_xlrd(path, matcher)
+        kind = _sniff_xls(path)
+        if kind == "html":
+            yield from _extract_html_tables(path, matcher)
+        elif kind == "xlsx":
+            yield from _extract_openpyxl(path, matcher)
+        else:
+            yield from _extract_xlrd(path, matcher)
     elif ext == ".xlsb":
         yield from _extract_pyxlsb(path, matcher)
     else:
         raise ValueError(f"Unsupported spreadsheet extension: {ext}")
+
+
+def _sniff_xls(path: Path) -> str:
+    """What an .xls really holds: 'cfb' (legacy Excel), 'xlsx' (zip) or 'html'."""
+    with open(path, "rb") as fh:
+        head = fh.read(512)
+    if head.startswith(b"PK\x03\x04"):
+        return "xlsx"
+    if head.lstrip(b"\xef\xbb\xbf \t\r\n")[:1] == b"<":
+        return "html"
+    return "cfb"
+
+
+class _TableParser(HTMLParser):
+    """Collect the rows of every <table> as lists of cell text."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tables: list[list[list[str]]] = []
+        self._row: list[str] | None = None
+        self._cell: list[str] | None = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "table":
+            self.tables.append([])
+        elif tag == "tr":
+            self._close_row()
+            self._row = []
+        elif tag in ("td", "th"):
+            self._close_cell()
+            self._cell = []
+        elif tag == "br" and self._cell is not None:
+            self._cell.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("td", "th"):
+            self._close_cell()
+        elif tag == "tr":
+            self._close_row()
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell.append(data)
+
+    def _close_cell(self):
+        if self._cell is not None and self._row is not None:
+            self._row.append(" ".join("".join(self._cell).split()))
+        self._cell = None
+
+    def _close_row(self):
+        self._close_cell()
+        if self._row is not None:
+            if not self.tables:
+                self.tables.append([])
+            self.tables[-1].append(self._row)
+        self._row = None
+
+    def close(self):
+        super().close()
+        self._close_row()
+
+
+def _extract_html_tables(path: Path, matcher: AliasMatcher) -> Iterator[Chunk]:
+    raw = path.read_bytes()
+    m = re.search(rb"charset=[\"']?([A-Za-z0-9_-]+)", raw[:2048])
+    text = None
+    for enc in ([m.group(1).decode("ascii")] if m else []) + ["utf-8", "cp1252", "latin-1"]:
+        try:
+            text = raw.decode(enc)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    parser = _TableParser()
+    parser.feed(text)
+    parser.close()
+    if not any(parser.tables):
+        raise ValueError("HTML saved as .xls but no table rows found")
+    for i, rows in enumerate(parser.tables, start=1):
+        yield from _stream_sheet(f"table{i}", (tuple(r) for r in rows), path, matcher)
 
 
 def _row_to_text(row) -> str:
@@ -65,6 +154,7 @@ def _stream_sheet(
     row_iter: Iterable,
     path: Path,
     matcher: AliasMatcher,
+    extra: dict | None = None,
 ) -> Iterator[Chunk]:
     """
     Common emit path. Takes an iterable that yields rows one at a time;
@@ -92,7 +182,7 @@ def _stream_sheet(
         item_ref=f"{sheet_name}!structure",
         subject=f"{path.stem} / {sheet_name}",
         content=structural,
-        metadata={"sheet": sheet_name, "kind": "structure", "extension": path.suffix.lower()},
+        metadata={"sheet": sheet_name, "kind": "structure", "extension": path.suffix.lower(), **(extra or {})},
         alias_matched=False,
     )
 
@@ -117,7 +207,7 @@ def _stream_sheet(
             subject=f"{path.stem} / {sheet_name}",
             content=f"{header_text}\n{row_text}",
             metadata={"sheet": sheet_name, "row": row_idx, "kind": "row",
-                      "extension": path.suffix.lower()},
+                      "extension": path.suffix.lower(), **(extra or {})},
             alias_matched=True,
         )
 
@@ -151,6 +241,11 @@ def _extract_openpyxl(path: Path, matcher: AliasMatcher) -> Iterator[Chunk]:
     try:
         for sheet_name in wb.sheetnames:
             ws = wb[sheet_name]
+            # Read-only mode trusts the sheet's declared <dimension>. Report
+            # exports (Salesforce and others) often declare "A1" for a sheet of
+            # thousands of rows, so only the first cell was read. Ignore it.
+            if hasattr(ws, "reset_dimensions"):
+                ws.reset_dimensions()
             yield from _stream_sheet(sheet_name, ws.iter_rows(values_only=True), path, matcher)
     finally:
         try:
@@ -162,14 +257,24 @@ def _extract_openpyxl(path: Path, matcher: AliasMatcher) -> Iterator[Chunk]:
 def _extract_xlrd(path: Path, matcher: AliasMatcher) -> Iterator[Chunk]:
     import xlrd  # lazy import
 
-    book = xlrd.open_workbook(str(path), on_demand=True)
+    extra = None
+    try:
+        book = xlrd.open_workbook(str(path), on_demand=True)
+    except xlrd.biffh.XLRDError as exc:
+        if "encrypted" not in str(exc).lower():
+            raise
+        # Protecting a sheet or the workbook structure makes Excel encrypt the
+        # .xls with its built-in password, which Excel then opens without
+        # asking. Try that password only; a real password still fails here.
+        book = xlrd.open_workbook(file_contents=_decrypt_default_password(path), on_demand=True)
+        extra = {"decrypted": "Excel default password (VelvetSweatshop)"}
     try:
         for sheet_name in book.sheet_names():
             sh = book.sheet_by_name(sheet_name)
             def _row_iter(sheet=sh):
                 for r in range(sheet.nrows):
                     yield tuple(sheet.row_values(r))
-            yield from _stream_sheet(sheet_name, _row_iter(), path, matcher)
+            yield from _stream_sheet(sheet_name, _row_iter(), path, matcher, extra)
             try:
                 book.unload_sheet(sheet_name)
             except Exception:
@@ -179,6 +284,21 @@ def _extract_xlrd(path: Path, matcher: AliasMatcher) -> Iterator[Chunk]:
             book.release_resources()
         except Exception:
             pass
+
+
+def _decrypt_default_password(path: Path) -> bytes:
+    import io
+    import msoffcrypto  # lazy import
+
+    with open(path, "rb") as fh:
+        office = msoffcrypto.OfficeFile(fh)
+        try:
+            office.load_key(password="VelvetSweatshop")
+            out = io.BytesIO()
+            office.decrypt(out)
+        except Exception as exc:
+            raise ValueError("Workbook is encrypted with a password other than Excel's default") from exc
+    return out.getvalue()
 
 
 def _extract_pyxlsb(path: Path, matcher: AliasMatcher) -> Iterator[Chunk]:

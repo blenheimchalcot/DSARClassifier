@@ -53,6 +53,16 @@ provenance:
     label: "Prior DSAR case file (<PRIOR-CASE>)"
   - match: "metadata/*"
     label: "Purview export metadata (not controller-held source data)"
+  # Material from outside Purview: say where it came from with `source:`, one of
+  # Purview Email, Purview Teams, Purview SharePoint, Purview OneDrive, Ad hoc files,
+  # Database extract, Live platform connection, Purview metadata, Other.
+  # (Without `source:` it is worked out from Purview's metadata and the path.)
+  - match: "Supplementary/<TEAM>_<DATE>/*"
+    label: "Supplementary source: provided by <TEAM> (<DATE>)"
+    source: "Ad hoc files"
+  - match: "Extracts/<SYSTEM>/*"
+    label: "Supplementary source: <SYSTEM> database extract (<DATE>)"
+    source: "Database extract"
   - match: "*<EXPORT_NAME>*.zip"
     label: "Original Purview export package (extracted and hashed; not ingested directly)"
 

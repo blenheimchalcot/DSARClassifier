@@ -95,7 +95,8 @@ CREATE TABLE IF NOT EXISTS provenance_files (
     purview_workload   TEXT,
     purview_location   TEXT,
     purview_url        TEXT,
-    recorded_at        TEXT NOT NULL
+    recorded_at        TEXT NOT NULL,
+    source_type        TEXT               -- declared by a config rule's `source:`; empty: inferred when read
 );
 
 -- Purview's own item report (metadata/Items_*.csv), trimmed to the fields
@@ -228,6 +229,9 @@ def connect(db_path: str | Path) -> Iterator[sqlite3.Connection]:
 
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    # Columns added after a case database was first made.
+    if not any(r[1] == "source_type" for r in conn.execute("PRAGMA table_info(provenance_files)")):
+        conn.execute("ALTER TABLE provenance_files ADD COLUMN source_type TEXT")
 
 
 def upsert_chunk(conn: sqlite3.Connection, chunk: Chunk) -> None:

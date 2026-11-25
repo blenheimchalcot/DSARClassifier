@@ -25,6 +25,7 @@ from dsar.chunking import (
     substrate_hold,
     teams_chat,
 )
+from dsar.chunking.common import fit_row
 from dsar.chunking.prefilter import build_matcher
 from dsar.classify import classify_all, load_system_prompt, ollama_info
 from dsar.config import load_config
@@ -188,8 +189,12 @@ def main() -> None:
 @click.argument("input_dir", type=click.Path(exists=True, file_okay=False, path_type=Path), required=False)
 @click.option("--db-path", default=None, help="SQLite path. Defaults to $DSAR_DATA_DIR/dsar.sqlite.")
 @click.option("--config", "config_path", default=DEFAULT_CONFIG, show_default=True)
+@click.option("--reread", "reread_list", default=None, type=click.Path(exists=True, dir_okay=False),
+              help="Text file of paths (relative to INPUT_DIR, one per line) to read again even though "
+                   "already ingested, e.g. after a reader fix. Chunks are upserted; nothing is deleted.")
 @_audited("ingest")
-def ingest(input_dir: Path | None, db_path: str | None, config_path: str, run: audit.Run) -> None:
+def ingest(input_dir: Path | None, db_path: str | None, config_path: str, reread_list: str | None,
+           run: audit.Run) -> None:
     """Walk INPUT_DIR (default: $DSAR_DATA_DIR/input), chunk every supported file, write to SQLite."""
     data_dir = _data_dir()
     if input_dir is None:
@@ -254,6 +259,15 @@ def ingest(input_dir: Path | None, db_path: str | None, config_path: str, run: a
                 (str(input_dir) + "%",),
             )
         }
+        if reread_list:
+            reread = {str(input_dir / line.strip()) for line in Path(reread_list).read_text().splitlines()
+                      if line.strip()}
+            missing = sorted(reread - {str(p) for p in other_paths})
+            if missing:
+                raise click.ClickException(f"--reread lists {len(missing)} path(s) not under input/: {missing[:3]}")
+            prior_paths -= reread
+            run.data["reread"] = sorted(reread)
+            click.echo(f"Re-reading {len(reread)} file(s) listed in {reread_list}")
         if prior_paths:
             kept = [p for p in other_paths if str(p) not in prior_paths]
             click.echo(
@@ -333,6 +347,10 @@ def ingest(input_dir: Path | None, db_path: str | None, config_path: str, run: a
             # Free memory from any cyclic references the previous file left behind.
             if file_idx % 100 == 0:
                 gc.collect()
+            if sz == 0 and path.exists():
+                db.record_skipped(conn, str(path), "empty file (0 bytes): nothing to read")
+                counters["skipped_files"] += 1
+                continue
             try:
                 # ---- Purview-Exchange-specific paths (existing) ----
                 if ext == ".xlsx" or ext in spreadsheets.SUPPORTED_EXTS:
@@ -378,13 +396,16 @@ def ingest(input_dir: Path | None, db_path: str | None, config_path: str, run: a
                     counters["skipped_files"] += 1
                     continue
 
-                for chunk in stream:
-                    db.upsert_chunk(conn, chunk)
-                    counters[chunk.source_type] = counters.get(chunk.source_type, 0) + 1
-                    if chunk.alias_matched:
-                        counters["alias_matched"] += 1
-                    written_since_commit += 1
-                    _maybe_commit()
+                for whole in stream:
+                    parts = ([whole] if whole.source_type not in ("spreadsheet_row", "csv_row")
+                             else fit_row(whole, cfg.chunking.max_chars, cfg.chunking.overlap_chars, matcher))
+                    for chunk in parts:
+                        db.upsert_chunk(conn, chunk)
+                        counters[chunk.source_type] = counters.get(chunk.source_type, 0) + 1
+                        if chunk.alias_matched:
+                            counters["alias_matched"] += 1
+                        written_since_commit += 1
+                        _maybe_commit()
             except Exception as exc:
                 db.record_skipped(conn, str(path), f"error: {exc}")
                 counters["skipped_files"] += 1
@@ -1057,6 +1078,10 @@ def personal_data_report_cmd(config_path: str | None, reviewer: str, run: audit.
                f"{result['from_redaction']} from redaction), {result['outstanding']} outstanding, "
                f"{len(result['placeholders_left'])} template placeholder(s) left")
     click.echo(f"  Register (private): {result['register']}")
+    if result["still_to_do"]:
+        click.echo("  Still to do before the report is final (`dsar serve`):")
+        for line in result["still_to_do"]:
+            click.echo(f"    - {line}")
     run.data.update(report=result["report"], draft=result["draft"], extracts=result["extracts"],
                     outstanding=result["outstanding"])
     if result["draft"]:
@@ -1305,10 +1330,14 @@ def markup_serve_cmd(folder: str, reviewer: str, subject: str, port: int, no_bro
 @click.argument("folder", type=click.Path(exists=True, file_okay=False))
 @click.option("--config", "config_path", default="config.yaml", show_default=True)
 @click.option("--system-prompt", default="claude_strict.md", show_default=True)
+@click.option("--prefilter-min-elements", default=50, show_default=True,
+              help="In items with more elements than this, send only elements naming the subject to the model; "
+                   "record the rest as score 0 (alias pre-filter). 0 sends everything.")
 @_audited("markup score")
-def markup_score_cmd(folder: str, config_path: str, system_prompt: str, run: audit.Run) -> None:
+def markup_score_cmd(folder: str, config_path: str, system_prompt: str, prefilter_min_elements: int,
+                     run: audit.Run) -> None:
     """Suggest a 0-10 score for every element in FOLDER with the local model (a hint, never a decision)."""
-    from dsar import classify
+    from dsar import classify, personal_data_report
     from dsar.toolbox.redaction import markup
 
     cfg = load_config(config_path)
@@ -1323,11 +1352,14 @@ def markup_score_cmd(folder: str, config_path: str, system_prompt: str, run: aud
     result = asyncio.run(markup.score_folder(
         Path(folder), system_prompt=prompt, model=cfg.model.default, subject_name=cfg.subject.name,
         max_tokens=cfg.model.max_tokens, temperature=cfg.model.temperature, concurrency=cfg.model.concurrency,
-        progress=progress))
+        progress=progress, matcher=build_matcher(cfg.subject), prefilter_min_elements=prefilter_min_elements,
+        item_scores=personal_data_report.stack_item_scores(Path(folder))))
     run.data.update(result)
     run.hash_file("markup_scores", Path(folder) / markup.SCORES_NAME)
     click.echo(f"Scored {result['scored']} of {result['elements']} element(s); {result['failed']} failed; "
-               f"{result['already_scored']} already scored.")
+               f"{result['already_scored']} already scored; {result['prefiltered']} not sent to the model "
+               f"(do not name the subject, in items over {prefilter_min_elements} elements); "
+               f"{result['carried']} line(s) carry their item's score {markup.REVIEW_MIN_SCORE}+ (method item-score-carried).")
 
 
 @main.command(name="serve")

@@ -15,6 +15,7 @@ dependencies = [
     "pypdf>=4.0.0",
     "python-pptx>=0.6.23",
     "xlrd>=2.0.1",
+    "msoffcrypto-tool>=5.0.0",
     "pyxlsb>=1.0.10",
     "extract-msg>=0.50.0",
     "beautifulsoup4>=4.12.0",

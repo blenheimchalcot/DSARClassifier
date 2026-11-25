@@ -181,7 +181,7 @@ def _computed(review_dir: Path, main_output: Path, folders: dict[str, Path]) -> 
         counts = disclosure.queue(conn)["counts"]
         data = personal_data_report.assemble(conn, folders)
     left = counts[disclosure.TO_REVIEW]
-    rows.append({"label": "Items scored 7+ decided", "done": left == 0, "link": "review",
+    rows.append({"label": f"Items scored {disclosure.MIN_SCORE}+ decided", "done": left == 0, "link": "reviewer",
                  "detail": f"{left} to review" if left else "all decided"})
     need = counts[disclosure.NEEDS_PASSAGES]
     rows.append({"label": "Passages selected for workbook 'Disclose with redactions'", "done": need == 0,
@@ -208,7 +208,9 @@ def next_step(computed: list[dict], manual: list[dict], docs: dict) -> dict:
     """The single most important thing to do now: review, then report, then documents, then sign-off, then send."""
     for c in computed:
         if not c["done"]:
-            where = "report" if c["label"].startswith("Personal Data Report built") else "review"
+            # "review": the Personal Data Reviewer; "queue": the classic list (workbook passages are chosen there).
+            where = ("report" if c["label"].startswith("Personal Data Report built")
+                     else "queue" if c.get("link") == "review" else "review")
             return {"text": f"{c['label']}: {c['detail']}", "where": where}
     for d in docs.get("rows", []):
         if d["status"] != "ready":

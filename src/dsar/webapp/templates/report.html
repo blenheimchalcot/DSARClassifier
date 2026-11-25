@@ -85,9 +85,10 @@
   </table>
   {% elif g.kind == "files" %}
   <table class="t">
-    <tr><th>Folder</th><th>File</th><th>Undecided</th></tr>
+    <tr><th>Folder</th><th>File</th><th>Undecided</th><th></th></tr>
     {% for r in g.rows %}
-    <tr><td class="small">{% if r.fid %}<a href="{{ url_for('tool_redaction.page', fid=r.fid) }}">{{ r.folder }}</a>{% else %}{{ r.folder }}{% endif %}</td><td class="mono">{% if r.fid %}<a href="{{ url_for('tool_redaction.page', fid=r.fid, file=r.file) }}">{{ r.file }}</a>{% else %}{{ r.file }}{% endif %}</td><td>{{ r.count }} element(s){% if r.repeats %} <span class="pill">{{ r.repeats }} repeat(s)</span>{% endif %}</td></tr>
+    <tr><td class="small">{% if r.fid %}<a href="{{ url_for('tool_redaction.page', fid=r.fid) }}"><b>{{ r.name }}</b></a>{% else %}<b>{{ r.name }}</b>{% endif %}<div class="mono muted small">{{ r.folder }}</div></td><td class="mono">{% if r.fid %}<a href="{{ url_for('tool_redaction.page', fid=r.fid, file=r.file) }}">{{ r.file }}</a>{% else %}{{ r.file }}{% endif %}</td><td>{{ r.count }} element(s){% if r.repeats %} <span class="pill">{{ r.repeats }} repeat(s)</span>{% endif %}</td>
+      <td>{% if r.fid %}{% if r.repeats %}<a class="btn sm primary" href="{{ url_for('tool_redaction.page', fid=r.fid, section='repeats') }}">Confirm {{ r.repeats }} repeat(s)</a>{% endif %}{% if r.count > r.repeats %} <a class="btn sm{{ '' if r.repeats else ' primary' }}" href="{{ url_for('tool_redaction.page', fid=r.fid, file=r.file) }}">Decide {{ r.count - r.repeats }}</a>{% endif %}{% endif %}</td></tr>
     {% endfor %}
   </table>
   {% else %}

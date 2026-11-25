@@ -124,6 +124,27 @@ def send_to_reviewer(conn, output_dir: Path, chunk_ids: list[str], reviewer: str
             "index_sha256": audit.sha256_file(folder / STACK_INDEX), "reviewer": reviewer}
 
 
+def stack_item_scores(folder: Path) -> dict[str, int]:
+    """For a review stack: each file's item score as classified, from the case database next to output/."""
+    import json
+    import sqlite3
+
+    idx, db_path = Path(folder) / STACK_INDEX, Path(folder).parent.parent / "dsar.sqlite"
+    if not idx.is_file() or not db_path.is_file():
+        return {}
+    index = json.loads(idx.read_text(encoding="utf-8"))
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        out = {}
+        for name, v in index.items():
+            row = conn.execute("SELECT score FROM classifications WHERE chunk_id = ?", (v.get("chunk_id"),)).fetchone()
+            if row and row[0] is not None:
+                out[name] = row[0]
+        return out
+    finally:
+        conn.close()
+
+
 def _stack_skip(conn, path: Path) -> set[str]:
     """Files in a review stack whose item has since been decided in Review (newest decision isn't IN_REVIEWER)."""
     import json
@@ -272,6 +293,44 @@ def assemble(conn, folders: dict[str, Path]) -> dict:
     return {"extracts": extracts, "outstanding": outstanding, "review": review,
             "from_review": len(review["pieces"]), "from_redaction": len(red_pieces),
             "folders": [str(p) for p in folders.values()], "excluded_folders": excluded, "folder_rows": rows}
+
+
+def undecided_files(data: dict) -> list[dict]:
+    """Personal Data Reviewer files keeping the report a DRAFT, named as the Reviewer names them.
+
+    Each: the folder's plain name and path, the file, its undecided elements, and how many of
+    those repeat text already decided (cleared in the Reviewer's Repeats section).
+    """
+    from dsar.toolbox.redaction import markup
+    from dsar.toolbox.redaction.web import friendly
+
+    loaded = [(Path(f), markup.Folder(Path(f), "", None).docs()) for f in data["folders"]]
+    sources = markup.repeat_sources(loaded)
+    repeats = {str(p / name): len(els) for p, docs in loaded for name, els in markup.repeats_for(docs, sources).items()}
+    out = []
+    for o in data["outstanding"]:
+        if o.get("file") and not o["why"].startswith("conflict"):
+            path = Path(o["file"])
+            out.append({"file": path.name, "path": str(path.parent), "folder": path.parent.name,
+                        "name": friendly(path.parent), "count": int(o["why"].split()[0]),
+                        "repeats": repeats.get(str(path), 0)})
+    return out
+
+
+def still_to_do(data: dict) -> list[str]:
+    """One plain line per outstanding thing, saying where to clear it (CLI output and the audit log)."""
+    lines = []
+    for f in undecided_files(data):
+        where = ("Repeats" if f["repeats"] == f["count"] else "Review")
+        rep = (f", {f['repeats']} of them repeat text you have already decided" if f["repeats"] else "")
+        lines.append(f"Personal Data Reviewer › {f['name']} › {f['file']}: {f['count']} element(s) undecided{rep}"
+                     f" (open the folder, section {where})")
+    for o in data["outstanding"]:
+        if o.get("why", "").startswith("conflict"):
+            lines.append(f"Personal Data Reviewer › Conflicts: {o.get('chunk_id') or Path(o['file']).name}: {o['why']}")
+        elif not o.get("file"):
+            lines.append(f"Review › item {o.get('chunk_id')}: {o.get('why', 'outstanding')}")
+    return lines
 
 
 def _set_cell(cell, text: str) -> None:
@@ -454,7 +513,7 @@ def build(conn, output_dir: Path, case_ref: str, subject_name: str, folders: dic
         p.chmod(0o444)
     result = {"report": str(report_path), "register": str(register_path), "draft": draft,
               "extracts": len(data["extracts"]), "from_review": data["from_review"],
-              "from_redaction": data["from_redaction"], "outstanding": n_out,
+              "from_redaction": data["from_redaction"], "outstanding": n_out, "still_to_do": still_to_do(data),
               "workbook_disclose_awaiting_passages": len(data["review"]["whole_from_workbook"]),
               "conflicts_held_out": sum(1 for o in data["outstanding"] if o["why"].startswith("conflict")),
               "decisions": data["review"]["decisions"], "redaction_folders": data["folders"],

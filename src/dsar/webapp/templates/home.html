@@ -13,7 +13,8 @@
 
   {% if rel and rel.next %}
   <div class="nextstep"><span class="ns-label">Next step</span> <b>{{ rel.next.text }}</b>
-    {% if rel.next.where == "review" %}<a class="btn primary" href="{{ url_for('tool_redaction.all_review') }}">Go to review →</a>
+    {% if rel.next.where == "review" %}<form method="post" action="{{ url_for('tool_redaction.review_due') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="btn primary">Go to review →</button></form>
+    {% elif rel.next.where == "queue" %}<a class="btn primary" href="{{ url_for('review.queue') }}">Choose the passages →</a>
     {% elif rel.next.where == "report" %}<a class="btn primary" href="{{ url_for('review.report_page') }}">Go to the report →</a>
     {% elif rel.next.where in ("confirm", "docs") %}<a class="btn primary" href="#release">See the checklist ↓</a>{% endif %}</div>
   {% endif %}
@@ -26,7 +27,7 @@
     <tr><th></th><th>From the case</th><th>Now</th></tr>
     {% for r in rel.computed %}
     <tr><td>{{ "✅" if r.done else "⬜" }}</td><td>{{ r.label }}</td>
-      <td class="small">{% if r.link %}<a href="{{ url_for('review.queue') if r.link == 'review' else url_for('review.report_page') }}">{{ r.detail }}</a>{% else %}{{ r.detail }}{% endif %}</td></tr>
+      <td class="small">{% if r.link == 'reviewer' and not r.done %}<form method="post" action="{{ url_for('tool_redaction.review_due') }}" style="display:inline"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="linkbtn">{{ r.detail }}</button></form>{% elif r.link == 'reviewer' %}<a href="{{ url_for('tool_redaction.all_review') }}">{{ r.detail }}</a>{% elif r.link == 'review' %}<a href="{{ url_for('review.queue') }}">{{ r.detail }}</a>{% elif r.link %}<a href="{{ url_for('review.report_page') }}">{{ r.detail }}</a>{% else %}{{ r.detail }}{% endif %}</td></tr>
     {% endfor %}
   </table>
   {% if fam.split %}<p class="muted small">From {{ fam.review_ref }}'s data, which Review, Report and the Personal Data Reviewer use from here.</p>{% endif %}

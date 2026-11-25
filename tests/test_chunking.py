@@ -68,3 +68,101 @@ def test_document_extractor_no_alias(tmp_path: Path):
     chunks = list(documents.extract(f, _matcher(), max_chars=8000, overlap_chars=200))
     assert len(chunks) == 1
     assert chunks[0].alias_matched is False
+
+
+def test_xls_that_is_html_is_read_as_a_table(tmp_path: Path):
+    from dsar.chunking import spreadsheets
+    p = tmp_path / "report.xls"
+    p.write_bytes(
+        b'<head><META http-equiv="Content-Type" content="text/html; charset=ISO-8859-1"></head>'
+        b"<table><tr><th>Apprentice</th><th>Status</th></tr>"
+        b"<tr><td>Someone Else</td><td>Completed</td></tr>"
+        b"<tr><td>Emma Banks</td><td>On &amp; off break</td></tr></table>")
+    chunks = list(spreadsheets.extract(p, _matcher()))
+    rows = [c for c in chunks if c.alias_matched]
+    assert len(rows) == 1
+    assert rows[0].content == "Apprentice | Status\nEmma Banks | On & off break"
+    assert rows[0].item_ref == "table1!row3"
+
+
+def test_csv_with_line_break_inside_a_quoted_cell(tmp_path: Path):
+    from dsar.chunking import csv_table
+    p = tmp_path / "survey.csv"
+    p.write_bytes(b'Name,Comment\r\n"Emma Banks","line one\rline two"\r\nOther,x\r\n')
+    rows = [c for c in csv_table.extract(p, _matcher()) if c.alias_matched]
+    assert len(rows) == 1 and "line one" in rows[0].content and "line two" in rows[0].content
+
+
+def test_fit_row_splits_an_oversize_row_and_keeps_every_part():
+    from dsar.chunking import Chunk
+    from dsar.chunking.common import fit_row
+    content = "H1 | H2\n" + "x" * 9000 + " Emma Banks " + "y" * 9000
+    row = Chunk(chunk_id="a", source_type="spreadsheet_row", source_path="/b.xlsx", item_ref="S!row5",
+                subject="b", content=content, metadata={"row": 5}, alias_matched=True)
+    parts = fit_row(row, max_chars=8000, overlap_chars=200, matcher=_matcher())
+    assert len(parts) == 3
+    assert all(len(p.content) <= 8000 for p in parts)
+    assert [p.item_ref for p in parts] == ["S!row5#p1", "S!row5#p2", "S!row5#p3"]
+    assert len({p.chunk_id for p in parts}) == 3
+    assert [p.alias_matched for p in parts] == [False, True, False]
+    assert fit_row(dataclasses_replace(row, content="short"), 8000, 200, _matcher())[0].chunk_id == "a"
+
+
+def dataclasses_replace(c, **kw):
+    import dataclasses
+    return dataclasses.replace(c, **kw)
+
+
+def test_xlsx_that_declares_a_wrong_dimension_is_read_in_full(tmp_path: Path):
+    # Report exports often declare <dimension ref="A1"/> for a sheet of many rows.
+    import re
+    import zipfile
+    from openpyxl import Workbook
+    from dsar.chunking import spreadsheets
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Learner", "Status"])
+    for i in range(50):
+        ws.append([f"Learner {i}", "On programme"])
+    ws.append(["Emma Banks", "Gateway"])
+    good = tmp_path / "good.xlsx"
+    wb.save(good)
+    bad = tmp_path / "report.xlsx"
+    with zipfile.ZipFile(good) as zin, zipfile.ZipFile(bad, "w") as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                data = re.sub(rb'<dimension ref="[^"]+"', b'<dimension ref="A1"', data)
+            zout.writestr(item, data)
+    rows = [c for c in spreadsheets.extract(bad, _matcher()) if c.alias_matched]
+    assert len(rows) == 1 and rows[0].content == "Learner | Status\nEmma Banks | Gateway"
+
+
+def test_xls_with_excel_default_password_is_read_and_flagged(tmp_path: Path, monkeypatch):
+    import xlrd
+    from dsar.chunking import spreadsheets
+
+    class Sheet:
+        nrows = 2
+        def row_values(self, r):
+            return [["Learner", "Status"], ["Emma Banks", "Registered"]][r]
+
+    class Book:
+        def sheet_names(self): return ["Sheet1"]
+        def sheet_by_name(self, name): return Sheet()
+        def unload_sheet(self, name): pass
+        def release_resources(self): pass
+
+    def open_workbook(filename=None, file_contents=None, on_demand=False):
+        if file_contents is None:
+            raise xlrd.biffh.XLRDError("Workbook is encrypted")
+        assert file_contents == b"decrypted"
+        return Book()
+
+    monkeypatch.setattr(xlrd, "open_workbook", open_workbook)
+    monkeypatch.setattr(spreadsheets, "_decrypt_default_password", lambda p: b"decrypted")
+    p = tmp_path / "reg.xls"
+    p.write_bytes(b"\xd0\xcf\x11\xe0" + b"\0" * 508)
+    rows = [c for c in spreadsheets.extract(p, _matcher()) if c.alias_matched]
+    assert len(rows) == 1 and "Emma Banks" in rows[0].content
+    assert rows[0].metadata["decrypted"].startswith("Excel default password")

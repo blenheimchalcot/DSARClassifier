@@ -274,7 +274,7 @@ def test_release_checklist_deadline_and_confirmations_are_logged_in_the_main_cas
     monkeypatch.delenv("DSAR_CASE_DOCS_ROOT", raising=False)
     app, c = client_for(webapp.Settings.for_case(case))
     page = c.get("/").get_data(as_text=True)
-    assert "Release of DSAR-TEST-0" in page and "Deadline unknown" in page and "Items scored 7+ decided" in page
+    assert "Release of DSAR-TEST-0" in page and "Deadline unknown" in page and "Items scored 6+ decided" in page
     r = c.post("/release/check", data={"csrf": c.csrf, "item": "received", "done": "1", "value": "20/10/2026"})
     assert "error=" in r.headers["Location"]
     c.post("/release/check", data={"csrf": c.csrf, "item": "received", "done": "1", "value": "2026-10-20"})
@@ -485,19 +485,20 @@ def test_unreviewed_items_are_brought_into_the_personal_data_reviewer(case, temp
     from dsar.toolbox.redaction import markup, web
 
     with db.connect(case / "dsar.sqlite") as conn:
-        conn.execute("UPDATE classifications SET score = 6 WHERE chunk_id = 'c'")
-        assert disclosure.intake(conn) == {9: ["b"], 8: ["d"], 7: ["a"], 6: ["c"]}
+        conn.execute("UPDATE classifications SET score = 5 WHERE chunk_id = 'c'")
+        assert disclosure.intake(conn) == {9: ["b"], 8: ["d"], 7: ["a"], 5: ["c"]}
     app, c = client_for(webapp.Settings.for_case(case))
     page = c.get("/toolbox/redaction/").get_data(as_text=True)
-    assert "Bring 1 item(s) scored 6 into review" in page and 'href="/toolbox/redaction/"' in c.get("/").get_data(as_text=True)
-    r = c.post("/toolbox/redaction/intake", data={"csrf": c.csrf, "score": "6"})
+    assert "Bring 1 item(s) scored 5 into review" in page and 'href="/toolbox/redaction/"' in c.get("/").get_data(as_text=True)
+    r = c.post("/toolbox/redaction/intake", data={"csrf": c.csrf, "score": "5"})
     assert "section=review" in r.headers["Location"]
-    folder = next((case / "output").glob(personal_data_report.STACK_PREFIX + "*_score6"))
+    folder = next((case / "output").glob(personal_data_report.STACK_PREFIX + "*_score5"))
     f = markup.Folder(folder, "Test Reviewer", None)
-    assert f.min_score == 0                                       # items below 7: every paragraph is shown
+    assert f.min_score == markup.REVIEW_MIN_SCORE                 # a folder can't lower the review line
+    assert all(el["below"] for el in f.docs()[0]["elements"])     # unscored paragraphs take the item's score (5)
     with db.connect(case / "dsar.sqlite") as conn:
         assert disclosure.latest(conn)["c"]["decision"] == disclosure.IN_REVIEWER
-        assert 6 not in disclosure.intake(conn)
+        assert 5 not in disclosure.intake(conn)
     assert audit.AuditLog(case / "output").entries()[-1]["command"] == "review intake"
     # Whole item: leave out every paragraph at once.
     with app.test_request_context():
@@ -508,3 +509,50 @@ def test_unreviewed_items_are_brought_into_the_personal_data_reviewer(case, temp
                headers={"X-CSRF": c.csrf})
     assert r.get_json()["decided"] == len(f.docs()[0]["elements"])
     assert markup.undecided_count(markup.Folder(folder, "", None).docs()[0]) == 0
+
+
+def test_go_to_review_brings_unreviewed_items_in_and_opens_the_reviewer(case, template):
+    with db.connect(case / "dsar.sqlite") as conn:
+        due = [cid for s, ids in disclosure.intake(conn).items() if s >= disclosure.MIN_SCORE for cid in ids]
+    assert due
+    app, c = client_for(webapp.Settings.for_case(case))
+    page = c.get("/").get_data(as_text=True)
+    assert 'action="/toolbox/redaction/review-due"' in page and "Go to review" in page
+    r = c.post("/toolbox/redaction/review-due", data={"csrf": c.csrf})
+    assert "/toolbox/redaction/f/" in r.headers["Location"] and "file=" in r.headers["Location"]   # opens the item
+    with db.connect(case / "dsar.sqlite") as conn:
+        assert all(disclosure.latest(conn)[cid]["decision"] == disclosure.IN_REVIEWER for cid in due)
+        assert not [s for s in disclosure.intake(conn) if s >= disclosure.MIN_SCORE]
+    assert audit.AuditLog(case / "output").entries()[-1]["data"]["via"] == "Go to review"
+
+
+def test_repeats_keeping_the_report_a_draft_are_named_where_the_reviewer_finds_them(case, template, monkeypatch):
+    from click.testing import CliRunner
+
+    from dsar import cli
+    from dsar.toolbox.redaction import markup
+
+    text = "Sam Sample starts on Monday.\n\nSam Sample's desk is by the window.\n"
+    old, new = (case / "output" / n for n in ("review_stack_20261123T153032Z_score7", "review_stack_20261124T080942Z_score7"))
+    for d in (old, new):
+        d.mkdir()
+        (d / "01_note.txt").write_text(text)
+    f = markup.Folder(old, "Test Reviewer", None)
+    doc = f.docs()[0]
+    for el in doc["elements"]:
+        f.act({"file": doc["name"], "sha256": doc["sha256"], "action": "decide", "element": el["id"], "decision": "release"})
+    n = len(doc["elements"])
+
+    app, c = client_for(webapp.Settings.for_case(case))
+    page = c.get("/report/").get_data(as_text=True)
+    assert "These keep the report a DRAFT" in page and "Items scored 7 (24 Nov)" in page
+    assert f"Confirm {n} repeat(s)" in page and "section=repeats" in page and "Decide 0" not in page
+    index = c.get("/toolbox/redaction/").get_data(as_text=True)
+    assert "Items scored 7 (24 Nov)</b>: " + str(n) + " repeat(s)" in index and "builds as a DRAFT" in index
+
+    monkeypatch.setenv("DSAR_DATA_DIR", str(case))
+    r = CliRunner().invoke(cli.main, ["personal-data-report", "--reviewer", "Test Reviewer"])
+    assert r.exit_code == 0, r.output
+    assert "Still to do" in r.output
+    assert (f"Personal Data Reviewer › Items scored 7 (24 Nov) › 01_note.txt: {n} element(s) undecided, "
+            f"{n} of them repeat text you have already decided (open the folder, section Repeats)") in r.output

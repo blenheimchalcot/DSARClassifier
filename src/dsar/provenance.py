@@ -19,7 +19,7 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Callable
 
-from dsar import db, message_attachments, pst_attachments
+from dsar import db, message_attachments, pst_attachments, sources
 from dsar.config import ClassifyScope, ProvenanceRule
 
 
@@ -51,10 +51,15 @@ def load_manifest(path: Path) -> dict[str, str]:
 
 def label_for(rel_path: str, rules: list[ProvenanceRule]) -> str:
     """First matching rule wins; unmatched files are primary source material."""
+    rule = rule_for(rel_path, rules)
+    return rule.label if rule else DEFAULT_LABEL
+
+
+def rule_for(rel_path: str, rules: list[ProvenanceRule]) -> ProvenanceRule | None:
     for rule in rules:
         if fnmatchcase(rel_path, rule.match):
-            return rule.label
-    return DEFAULT_LABEL
+            return rule
+    return None
 
 
 def target_to_rel(target_path: str) -> str | None:
@@ -157,7 +162,8 @@ def build(
         matches = by_rel.get(rel, [])
         if matches:
             counters["purview_matched"] += 1
-        label = label_for(rel, rules)
+        rule = rule_for(rel, rules)
+        label = rule.label if rule else DEFAULT_LABEL
         if label != DEFAULT_LABEL:
             counters["labelled"] += 1
 
@@ -170,12 +176,12 @@ def build(
         conn.execute(
             """INSERT INTO provenance_files (source_path, rel_path, sha256, manifest_sha256,
                    provenance_label, purview_custodian, purview_workload, purview_location,
-                   purview_url, recorded_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   purview_url, recorded_at, source_type)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (str(path), rel, digest, expected, label,
              _joined("custodian"), _joined("workload"),
              "(per email - see purview_items)" if is_pst else _joined("compound_path"),
-             "" if is_pst else _joined("url"), db._now()),
+             "" if is_pst else _joined("url"), db._now(), sources.check_source(rule.source) if rule else ""),
         )
         counters["files"] += 1
     return counters

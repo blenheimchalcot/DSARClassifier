@@ -21,7 +21,7 @@ from pathlib import Path
 
 from dsar import audit, db, evidence, report
 
-MIN_SCORE = 7
+MIN_SCORE = 6          # operator instruction 2026-11-23: items scored 6+ are reviewed (was 7)
 STATUS_TO_REVIEW, STATUS_DONE = "To review", "Done"
 EVIDENCE_OPEN, EVIDENCE_CLOSE = "【", "】"
 CONTEXT_CHARS = 1500       # either side of the evidence
