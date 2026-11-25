@@ -1,0 +1,48 @@
+{% extends "help/_layout.html" %}
+{% block help %}
+<p>This is where you decide, paragraph by paragraph, what is the data subject's personal data. What you <b>extract</b> goes into the Personal Data Report. What you <b>leave out</b> stays out, with your reason on record. Every decision is saved as you make it, under your name.</p>
+
+<h2>Start</h2>
+<ol>
+  <li>On the case page, press <b>Go to review →</b>. Every item scored {{ min_score }} or more that nobody has reviewed yet is brought in, and the first one opens.</li>
+  <li>Or open <b>Personal Data Reviewer</b> in the top bar. Its front page shows <i>What's left to do</i>, every folder of items, and buttons to <b>bring items into review</b> by score.</li>
+</ol>
+<p class="small muted">Bringing items in copies each item's exact text into a new folder (<span class="mono">review_stack_&lt;time&gt;</span>), shown with a plain name such as <i>Items scored 7 (24 Nov)</i>. The step is logged.</p>
+
+<h2>Decide each paragraph</h2>
+<table class="t">
+  <tr><th>Decision</th><th>Key</th><th>When</th></tr>
+  <tr><td><b>Extract</b></td><td class="mono">E</td><td>The paragraph is the subject's personal data and can be given to them as it is.</td></tr>
+  <tr><td><b>Leave out</b></td><td class="mono">L</td><td>None of it goes in. Pick the reason (numbers 1–9 pick from the list); <span class="mono">Shift+L</span> repeats your last reason.</td></tr>
+  <tr><td><b>Leave part out</b></td><td class="mono">P</td><td>Some of it is the subject's data and some isn't: select the text to cut (for example another person's details), with a reason. The rest is extracted.</td></tr>
+  <tr><td>Whole item</td><td class="mono">W / X</td><td>Extract every undecided paragraph of the item, or leave them all out as not the requester's personal data (it asks first).</td></tr>
+</table>
+<p>Other keys: <span class="mono">C</span> opens the <b>Context</b> (the whole document, the whole original item and the conversation around it); <span class="mono">↓ ↑</span> or <span class="mono">J K</span> move; <span class="mono">S</span> asks the local model to <b>Suggest score</b>, a hint and never a decision.</p>
+
+<h3>Reasons for leaving text out</h3>
+<ul>
+  {% for r in reasons %}<li>{{ r }}</li>{% endfor %}
+</ul>
+<p class="small">Use <b>Duplicate – already in the Personal Data Report</b> for data that is already extracted elsewhere: the report gives each piece of data once. Use <b>Other</b> only with a note, and ask the DPO when you aren't sure an exemption applies. Don't guess.</p>
+
+<h2>What is the subject's personal data?</h2>
+<ul>
+  <li><b>Extract</b> what is about them: details that identify them, what was decided or done about them, opinions about them, what they said or wrote.</li>
+  <li><b>Leave out</b> what only mentions them in passing (a CC line, a meeting invite), business content that isn't about them, and email headers, signatures and quoted threads that carry nothing new.</li>
+  <li><b>Other people's details</b> are third-party personal data: extract the subject's part and leave the other person's out (<i>Leave part out</i>).</li>
+  <li><b>Legal advice</b> to or from a lawyer may be privileged: leave it out as <i>Legal professional privilege</i> and tell the DPO.</li>
+</ul>
+
+<h2>Repeats and conflicts</h2>
+<p>Email threads quote each other, so the same paragraph turns up in many files.</p>
+<ul>
+  <li><b>Repeats</b>: text you have already decided elsewhere. Each repeat sits beside your earlier decision. <b>Confirm match</b> applies the same outcome (an earlier extract becomes <i>Duplicate</i> here); <b>Not a match</b> sends it back to review. <b>Repeats keep the report a DRAFT until confirmed</b>, so clear them; the strip at the top and <i>What's left to do</i> name the folder they're in.</li>
+  <li><b>Conflicts</b>: the same text extracted in one place and left out in another. The report holds it back until you settle it, side by side in <i>Conflicts</i>.</li>
+</ul>
+
+<h2>Sections</h2>
+<p><b>To review</b> is what needs your decision. Paragraphs scored below {{ min_score }} fold away: they need no decision and stay out of the report unless you open one and extract it. <b>Reviewed</b> lets you check or change what was decided, filtered by decision or reason. Every change is a new entry: nothing is overwritten.</p>
+
+<h2>Done when</h2>
+<p><i>What's left to do</i> says <b>Nothing left to review</b>, and the strip at the top shows <b>Build report →</b>.</p>
+{% endblock %}

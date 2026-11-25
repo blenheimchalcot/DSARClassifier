@@ -1,0 +1,33 @@
+{% extends "help/_layout.html" %}
+{% block help %}
+<p>Before anyone reviews, the operator turns the exported data (Microsoft Purview exports, files supplied by teams, database extracts) into passages scored for personal data about the subject. This is done in the terminal. The <b>Pipeline</b> table on the case page shows each stage's last status from the audit log.</p>
+
+<h2>Run order</h2>
+<table class="t">
+  <tr><th></th><th>Command</th><th>What it does</th></tr>
+  <tr><td>1</td><td class="mono">dsar audit note "Case … opened"</td><td>Starts the case's audit log: controller, operator, machine.</td></tr>
+  <tr><td>2</td><td class="mono">dsar manifest</td><td>Hashes the export before and after extraction, so it can be shown the data wasn't changed.</td></tr>
+  <tr><td>3</td><td class="mono">dsar attachments</td><td>Takes the attachments out of the mailboxes.</td></tr>
+  <tr><td>4</td><td class="mono">dsar ingest</td><td>Reads every file into passages in the case database.</td></tr>
+  <tr><td>5</td><td class="mono">dsar provenance</td><td>Checks each file against the manifest and records where it came from.</td></tr>
+  <tr><td>6</td><td class="mono">dsar qa ingest</td><td>Checks every file is accounted for. Read every <i>low-yield</i> file it lists by hand.</td></tr>
+  <tr><td>7</td><td class="mono">dsar model-check</td><td>Checks the local model is accurate and isn't cutting text short.</td></tr>
+  <tr><td>8</td><td class="mono">dsar classify</td><td>Scores every passage 0–10 for personal data about the subject. Long: it resumes if stopped.</td></tr>
+  <tr><td>9</td><td class="mono">dsar verify-evidence</td><td>Re-checks that every high score quotes text really in the passage.</td></tr>
+  <tr><td>10</td><td class="mono">dsar qa classify</td><td>Checks the scores and sends a sample for a person to score blind.</td></tr>
+</table>
+<p class="small muted">Add <span class="mono">--config &lt;case config&gt;</span> to each command. The full run-book, including the model settings: <span class="mono">docs/OPERATIONS.md</span>.</p>
+
+<h2>What the scores mean</h2>
+<table class="t">
+  <tr><th>Score</th><th>Meaning</th></tr>
+  <tr><td>0–5</td><td>Little or nothing about the subject. Not reviewed unless you choose to.</td></tr>
+  <tr><td>6–7</td><td>Specific personal information: contact details, dates, HR or study actions.</td></tr>
+  <tr><td>8–9</td><td>Opinions about the subject's conduct or performance, complaints.</td></tr>
+  <tr><td>10</td><td>Highly opinionated, derogatory or sensitive remarks.</td></tr>
+</table>
+<p>Items and paragraphs scored <b>{{ min_score }} or more</b> need a reviewer's decision. A score is a pointer, never a decision: the model can be wrong in both directions.</p>
+
+<h2>Reading the original</h2>
+<p>The <b>Mail viewer</b> and <b>Teams viewer</b> open a mailbox from the case as its owner saw it. In a case they open only mailboxes listed in the manifest, after checking the file hasn't changed. Anything you save goes read-only into the case's <span class="mono">output/toolbox/</span> folder and is logged with your name.</p>
+{% endblock %}

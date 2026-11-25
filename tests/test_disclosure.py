@@ -1,5 +1,6 @@
 """Review decisions in the web app, and the Personal Data Report built from them (synthetic data only)."""
 import csv
+import io
 import re
 import stat
 from pathlib import Path
@@ -556,3 +557,23 @@ def test_repeats_keeping_the_report_a_draft_are_named_where_the_reviewer_finds_t
     assert "Still to do" in r.output
     assert (f"Personal Data Reviewer › Items scored 7 (24 Nov) › 01_note.txt: {n} element(s) undecided, "
             f"{n} of them repeat text you have already decided (open the folder, section Repeats)") in r.output
+
+
+def test_the_repo_template_gives_identifiers_then_one_row_per_extract():
+    import docx
+
+    template = Path(__file__).resolve().parents[1] / "Templates" / personal_data_report.TEMPLATE_NAME
+    extracts = [{"text": "Sam started on 1 March.\nRole: **Analyst**", "sources": []},
+                {"text": "A note with [brackets] of its own.", "sources": []}]
+    doc = docx.Document(io.BytesIO(personal_data_report.build_docx(template, "Sam Sample", extracts, "DRAFT: not for release.")))
+    ids, xt = doc.tables
+    assert [c.text for c in ids.rows[1].cells] == ["Data subject", "Sam Sample"]
+    assert [r.cells[0].text for r in xt.rows] == ["Data extracted from our records",
+                                                 "Sam started on 1 March.\nRole: Analyst", "A note with [brackets] of its own."]
+    assert doc.paragraphs[0].text == "DRAFT: not for release."
+    assert not personal_data_report.placeholders(*personal_data_report._fill(template, "Sam Sample", extracts))
+    pv = personal_data_report.preview(template, "Sam Sample", extracts)
+    assert [r["kind"] for r in pv["rows"]] == ["header", "field", "extracts"]
+    assert "Personal identifiers" not in pv["intro"] and pv["intro"][0] == "Personal Data Report"
+    # No subject name: the placeholder is left and listed, so the build stays a draft.
+    assert personal_data_report.preview(template, "", [])["placeholders"] == ["[Data subject name]"]

@@ -76,3 +76,17 @@ details.todo summary::before{content:"▸ ";color:var(--muted)}details.todo[open
 
 /* A form button that looks like a link (actions that record something, e.g. bringing items into review). */
 .linkbtn{background:none;border:0;padding:0;font:inherit;color:var(--accent,#2f5d8a);text-decoration:underline;cursor:pointer}
+/* Help */
+.topbar .helplink{font-size:14px;text-decoration:none;color:var(--accent);padding:5px 10px;border:1px solid var(--line);border-radius:6px;white-space:nowrap}
+.topbar .helplink:hover,.topbar .helplink.on{border-color:var(--accent)}
+.topbar .helplink+.who{margin-left:12px}
+.topbar nav+.helplink{margin-left:auto}
+.help{display:grid;grid-template-columns:220px minmax(0,1fr);gap:28px;align-items:start}
+.help-nav{display:flex;flex-direction:column;gap:2px;position:sticky;top:12px}
+.help-nav a{padding:6px 10px;border-radius:6px;text-decoration:none;color:var(--ink);font-size:14px}
+.help-nav a:hover{background:var(--panel)}.help-nav a.on{background:var(--accent);color:var(--accent-ink)}
+.help-body{max-width:760px}.help-body li{margin:4px 0}.help-body table.t{margin:8px 0 12px}
+.help-code{font-family:var(--mono);font-size:13px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;overflow-x:auto;white-space:pre}
+.help-steps{padding-left:22px}.help-steps li{margin:10px 0}
+.help-pager{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-top:28px}
+@media (max-width:760px){.help{grid-template-columns:1fr}.help-nav{position:static;flex-direction:row;flex-wrap:wrap}}

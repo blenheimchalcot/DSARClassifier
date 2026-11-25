@@ -2,7 +2,13 @@
 
 ## Unreleased
 
+### Added
+- **Help in the web app** (`/help/`): the process step by step (set up and sign in, prepare the case, review, build the report, release) plus the ground rules. **? Help** in the top bar, and in the Personal Data Reviewer's bar, opens the step for the page you are on. Help can be read before signing in.
+- [docs/CLASSIFICATION.md](docs/CLASSIFICATION.md): how passages are chosen (alias pre-filter, duplicates, scope), scored 0–10 by the local model, their evidence checked and retried, quality-checked, and scored again paragraph by paragraph in the Personal Data Reviewer.
+- **Response templates in the repository** (`Templates/`, the employee set): response letter, Personal Data Report, Exemptions Report and Data not in Scope. See [Templates/README.md](Templates/README.md). `DSAR_TEMPLATES_DIR` is now only needed for another set.
+
 ### Changed
+- **Personal Data Report: identifiers then extracts.** The template in `Templates/` has a *Personal identifiers* table (the data subject's name filled in) and an *Extracted data* table with **one row per extract**, Arial 10 pt, left aligned, full-width tables: the layout of the 24 Nov 2026 release, now built directly instead of restyled by hand. Generic (*SAMPLE TABLE*) and tailored one-table templates are filled as before. The preview shows the new layout, and a DRAFT line takes the title's font.
 - **What keeps the report a DRAFT is named where you find it.** The Personal Data Reviewer's *What's left to do* lists repeats per folder (its plain name, e.g. *Items scored 7 (24 Nov)*, with a *Confirm them* button for that folder) and says these keep the Personal Data Report a DRAFT. The Report page's *Finish in the Personal Data Reviewer* uses the same folder names (the folder's own name below), with *Confirm N repeat(s)* and *Decide N* buttons on each file. `dsar personal-data-report` lists each outstanding thing under *Still to do* and where to clear it, instead of only a count; the list is also in the audit entry (`still_to_do`).
 
 ## 0.3.1 (2026-11-18)

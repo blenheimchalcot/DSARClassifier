@@ -19,7 +19,7 @@ from flask import abort, redirect, render_template, request, session, url_for
 CSP = ("default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
        "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src 'self'; object-src 'none'; "
        "base-uri 'none'; form-action 'self'; frame-ancestors 'self'")
-_OPEN_ENDPOINTS = {"main.signin", "main.denied", "static"}
+_OPEN_ENDPOINTS = {"main.signin", "main.denied", "static", "help.index", "help.topic"}
 _ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
 
 

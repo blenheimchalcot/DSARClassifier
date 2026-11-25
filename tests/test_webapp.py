@@ -321,3 +321,26 @@ def test_sign_in_name_is_remembered_by_the_browser_and_only_prefilled(case):
     assert "dsar_reviewer_name=;" in r.headers["Set-Cookie"]
     entry = audit.AuditLog(case / "output").entries()[-1]
     assert entry["command"] == "toolbox app sign-in" and entry["data"]["reviewer"] == "Pat Reviewer"
+
+
+def test_help_walks_through_the_process_and_each_page_links_to_its_step(case):
+    from dsar.webapp import help
+
+    app, c = client_for(webapp.Settings.for_case(case), name=None)
+    # Readable before sign-in, so a new reviewer can find out what they are signing in to.
+    assert "help/" in c.get("/signin").get_data(as_text=True)
+    index = c.get("/help/").get_data(as_text=True)
+    for key, title, _ in help.TOPICS:
+        assert f"/help/{key}" in index
+        page = c.get(f"/help/{key}")
+        assert page.status_code == 200, key
+        assert title in page.get_data(as_text=True)
+    assert c.get("/help/nonsense").status_code == 404
+    review = c.get("/help/review").get_data(as_text=True)
+    assert "Duplicate – already in the Personal Data Report" in review and "scored 6 or more" in review
+
+    app, c = client_for(webapp.Settings.for_case(case))
+    assert 'href="/help/release"' in c.get("/").get_data(as_text=True)
+    assert 'href="/help/setup"' in c.get("/cases/").get_data(as_text=True)
+    assert 'href="/help/prepare"' in c.get("/toolbox/").get_data(as_text=True)
+    assert 'class="helplink on"' in c.get("/help/report").get_data(as_text=True)

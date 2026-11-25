@@ -68,7 +68,7 @@ class Settings:
 def create_app(settings: Settings) -> Flask:
     from dsar import toolbox
     from dsar.toolbox.mailbox.store import MailboxStore
-    from dsar.webapp import review, security, views
+    from dsar.webapp import help, review, security, views
 
     app = Flask(__name__)
     app.secret_key = secrets.token_bytes(32)
@@ -84,18 +84,20 @@ def create_app(settings: Settings) -> Flask:
     security.install(app)
     app.register_blueprint(views.bp)
     app.register_blueprint(review.bp)
+    app.register_blueprint(help.bp)
     for tool in toolbox.TOOLS:
         app.register_blueprint(tool.blueprint(), url_prefix=f"/toolbox/{tool.key}")
 
     @app.context_processor
     def _globals():
-        from flask import session
+        from flask import request, session
         subject = settings.subject_name
         if settings.case_bound and not subject:
             from dsar.webapp import cases
             subject = cases.family(settings).subject_name      # e.g. a main case whose config is in its deeper search
         return {"settings": settings, "tools": toolbox.TOOLS, "version": __version__, "subject_name": subject,
-                "reviewer": session.get("name", ""), "csrf": session.get("csrf", "")}
+                "reviewer": session.get("name", ""), "csrf": session.get("csrf", ""),
+                "help_topic": help.help_for(request.endpoint, request.blueprint)}
 
     return app
 

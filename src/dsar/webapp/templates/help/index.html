@@ -1,0 +1,27 @@
+{% extends "help/_layout.html" %}
+{% block help %}
+<h1>How a request goes through</h1>
+<p>A Data Subject Access Request (DSAR) gives the requester the right to a copy of their personal data. This app takes you from the exported data to the response: every passage that mentions the data subject is scored, you decide what is their personal data, and the app builds the Personal Data Report from your decisions. Everything you decide is recorded under your name in the case audit log.</p>
+
+<ol class="help-steps">
+  {% for key, t, line in topics if key != "rules" %}
+  <li><a href="{{ url_for('help.topic', topic=key) }}"><b>{{ t[3:] }}</b></a><div class="muted small">{{ line }}</div></li>
+  {% endfor %}
+</ol>
+
+<h2>Who does what</h2>
+<table class="t">
+  <tr><th>Role</th><th>Does</th><th>Where</th></tr>
+  <tr><td>Operator</td><td>Sets up the case, runs the scoring, keeps the audit log</td><td>Terminal (steps 1–2)</td></tr>
+  <tr><td>Reviewer</td><td>Decides what is the data subject's personal data</td><td>Personal Data Reviewer (step 3)</td></tr>
+  <tr><td>DPO</td><td>Signs off exemptions, the report and the response</td><td>Report and case page (steps 4–5)</td></tr>
+</table>
+
+<h2>Finding your way</h2>
+<ul>
+  <li><b>Help</b> in the top bar opens the step for the page you are on.</li>
+  <li>The <b>case page</b> (<i>Current case</i> in the top bar) always shows the <b>Next step</b> and how many days are left.</li>
+  <li>Anything that keeps the report a DRAFT is listed, with a button to clear it, on the Personal Data Reviewer's front page (<i>What's left to do</i>) and on the Report page (<i>Left to process</i>).</li>
+</ul>
+<p>Read the <a href="{{ url_for('help.topic', topic='rules') }}">ground rules</a> before your first case.</p>
+{% endblock %}

@@ -1,0 +1,15 @@
+{% extends "help/_layout.html" %}
+{% block help %}
+<p>Each rule exists because something went wrong without it. The full set, for operators: <span class="mono">docs/OPERATIONS.md</span>.</p>
+<table class="t">
+  <tr><th>Rule</th><th>Why</th></tr>
+  <tr><td><b>One case at a time, and check it's the right one.</b> The banner names the data subject; <span class="mono">DSAR_DATA_DIR</span> decides the case.</td><td>One person's data must never end up in another person's response.</td></tr>
+  <tr><td><b>Case data stays in the case folder</b>, on this machine, outside OneDrive and git. Don't copy it, email it or upload it.</td><td>The code folder is synced and the repository is shared.</td></tr>
+  <tr><td><b>Never delete.</b> Superseded files are moved to an archive folder, never removed. Corrections are new entries.</td><td>The case must show what was done, by whom and when.</td></tr>
+  <tr><td><b>Never trust the model.</b> A score is a hint. Read the text before you decide.</td><td>The model has invented quotes and scored passages too high and too low.</td></tr>
+  <tr><td><b>Sign in as yourself</b>, and sign out when you hand over.</td><td>Every decision is recorded under the name signed in.</td></tr>
+  <tr><td><b>Build the report in the app.</b> Never by hand or with another tool.</td><td>Only the app's build is tied to the decisions, the register and the audit log.</td></tr>
+  <tr><td><b>Exclude, don't delete.</b> Material that isn't this request's (another request's case files, for example) is labelled and kept out of scope, with the decision logged.</td><td>It can be most of the hits, and the reason must be on record.</td></tr>
+  <tr><td><b>Ask, don't guess</b>, on exemptions and anything unusual: ask the DPO.</td><td>Withholding needs a lawful reason; releasing someone else's data is a breach.</td></tr>
+</table>
+{% endblock %}

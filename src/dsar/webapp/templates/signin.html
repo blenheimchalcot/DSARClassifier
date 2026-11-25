@@ -14,5 +14,6 @@
     <p><button class="btn primary" {{ "autofocus" if remembered }}>{{ "Continue as " ~ remembered if remembered else "Continue" }}</button></p>
     {% if remembered %}<p class="muted small">Not {{ remembered }}? Type your own name; untick the box to stop this browser remembering one.</p>{% endif %}
   </form>
+  <p class="small"><a href="{{ url_for('help.index') }}">New to this? Read how a request goes through →</a></p>
 </main>
 {% endblock %}

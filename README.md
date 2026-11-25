@@ -13,6 +13,9 @@ Local pipeline for GDPR / UK GDPR Data Subject Access Requests over Microsoft Pu
 ## Documentation
 
 - [docs/OPERATIONS.md](docs/OPERATIONS.md): operating rules and run-book. Read before any case.
+- [docs/CLASSIFICATION.md](docs/CLASSIFICATION.md): how passages are chosen, scored 0–10 and checked.
+- **Help** in the web app (`dsar serve`): the process step by step, for operators and reviewers.
+- [Templates/README.md](Templates/README.md): the response templates (employee requests).
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): building it on a new machine or server, including for another organisation.
 - [docs/HANDOVER.md](docs/HANDOVER.md): handing the platform to another organisation: release pack and sign-off checklist.
 - [docs/COVERAGE.md](docs/COVERAGE.md): what each source gives and what needs a person.

@@ -1,0 +1,37 @@
+{% extends "help/_layout.html" %}
+{% block help %}
+<p>Everything runs on your own machine. The app is reachable only from this computer, nothing is loaded from the internet, and case data never goes into the code folder, OneDrive or git.</p>
+
+<h2>Install or update</h2>
+<p>You need Python 3.10 or later and access to the DSARClassifier repository. In the project folder:</p>
+<pre class="help-code">git checkout main
+git pull
+python3 -m venv .venv          # first time only
+source .venv/bin/activate
+pip install -r requirements.lock &amp;&amp; pip install -e . --no-deps
+python -m pytest -q            # every test should pass</pre>
+<p class="small muted">Setting up a new machine from scratch: <span class="mono">docs/DEPLOYMENT.md</span>.</p>
+
+<h2>Point it at the case</h2>
+<p>Copy <span class="mono">.env.example</span> to <span class="mono">.env</span> and set:</p>
+<table class="t">
+  <tr><th>Setting</th><th>What it is</th></tr>
+  <tr><td class="mono">DSAR_DATA_DIR</td><td>The case's data folder (<span class="mono">&lt;CASE-REF&gt;/data</span>). Keep it <b>outside</b> OneDrive, Dropbox and iCloud.</td></tr>
+  <tr><td class="mono">DSAR_OPERATOR</td><td>Your name, as the audit log should record it.</td></tr>
+  <tr><td class="mono">DSAR_TEMPLATES_DIR</td><td>Optional: another set of response templates. If unset, <span class="mono">Templates/</span> in the project folder is used: the employee set, including <b>Personal Data Report.docx</b>.</td></tr>
+  <tr><td class="mono">DSAR_CASE_DOCS_ROOT</td><td>Optional: the folder holding each case's prepared letter and reports, so the case page can check them.</td></tr>
+</table>
+<div class="note"><b>Check the case before every session.</b> <span class="mono">DSAR_DATA_DIR</span> decides whose data you are working on. The green banner under the top bar names the data subject: if it isn't the person you expect, stop.</div>
+
+<h2>Start the app</h2>
+<pre class="help-code">dsar serve           # opens the case in DSAR_DATA_DIR
+dsar serve --free    # no case: only for trying the tools, nothing is logged</pre>
+<p>The terminal prints a one-off address. Open it in your browser. <b>Ctrl-C</b> in the terminal stops the app. A restart gives a new address, so close the old tab.</p>
+
+<h2>Sign in</h2>
+<p>Enter your <b>full name</b>. It is recorded with every decision and export you make. Tick <i>Remember my name on this browser</i> to have it filled in next time; you still confirm it, so whoever is at the keyboard is the person recorded.</p>
+
+<h2>Switch case</h2>
+<p><b>Cases</b> in the top bar lists every case in the cases folder. Opening one is logged in both cases. A case marked <i>legacy</i> was worked before the app kept its own log and needs a tick to open. A case marked <i>chain problems</i> has an audit log that fails its check: find out why before relying on it.</p>
+<p>A request can have a <b>main case</b> and <b>deeper searches</b> under it. You always work from the main case: its Personal Data Reviewer and Report use the search's data directly.</p>
+{% endblock %}

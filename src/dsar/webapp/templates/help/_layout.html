@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Help{% if title %}: {{ title }}{% endif %}{% endblock %}
+{% block content %}
+<div class="help">
+  <nav class="help-nav">
+    <a href="{{ url_for('help.index') }}" class="{{ 'on' if not current }}">The process</a>
+    {% for key, t, _ in topics %}<a href="{{ url_for('help.topic', topic=key) }}" class="{{ 'on' if key == current }}">{{ t }}</a>{% endfor %}
+  </nav>
+  <article class="help-body">
+    {% if title %}<h1>{{ title }}</h1>{% endif %}
+    {% block help %}{% endblock %}
+    {% if prev or next %}
+    <p class="help-pager">
+      {% if prev %}<a class="btn" href="{{ url_for('help.topic', topic=prev[0]) }}">← {{ prev[1] }}</a>{% endif %}
+      {% if next %}<a class="btn primary" href="{{ url_for('help.topic', topic=next[0]) }}">{{ next[1] }} →</a>{% endif %}
+    </p>
+    {% endif %}
+  </article>
+</div>
+{% endblock %}
