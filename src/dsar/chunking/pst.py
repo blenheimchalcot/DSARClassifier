@@ -236,6 +236,11 @@ def _process_message(
         if origin is None:
             kept_paras.append(para)
             new_hashes.append(h)
+        elif origin == chunk_id:
+            # Recorded against this same message by an earlier ingest (every ingest
+            # re-reads the PSTs). It is this message's own paragraph, not a repeat:
+            # dropping it would overwrite the stored email with a cut-down copy.
+            kept_paras.append(para)
         else:
             dup_origins.append(origin)
 
